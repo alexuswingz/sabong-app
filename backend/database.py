@@ -122,6 +122,7 @@ async def init_db():
         await init_cashin_table()
         await init_cashout_table()
         await init_bet_history_table()
+        await init_support_tables()
                 
     except Exception as e:
         print(f"❌ Database connection error: {e}")
@@ -907,4 +908,260 @@ async def reject_cashout_request(request_id: int, staff_id: int) -> Optional[dic
             }
     except Exception as e:
         print(f"Error rejecting cashout: {e}")
+        return None
+
+
+# ============ SUPPORT TICKETS ============
+_local_support_tickets: list = []
+_local_support_messages: list = []
+_local_ticket_counter = 0
+_local_message_counter = 0
+
+
+async def init_support_tables():
+    """Create support ticket tables"""
+    global pool
+    
+    if LOCAL_MODE:
+        return
+    
+    try:
+        async with pool.acquire() as conn:
+            # Support tickets table
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS support_tickets (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id),
+                    status VARCHAR(20) DEFAULT 'open',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    closed_at TIMESTAMP
+                )
+            ''')
+            
+            # Support messages table
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS support_messages (
+                    id SERIAL PRIMARY KEY,
+                    ticket_id INTEGER REFERENCES support_tickets(id),
+                    sender_id INTEGER REFERENCES users(id),
+                    sender_type VARCHAR(20) NOT NULL,
+                    message TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            print("✅ Support ticket tables ready!")
+    except Exception as e:
+        print(f"Error creating support tables: {e}")
+
+
+async def get_or_create_ticket(user_id: int) -> Optional[dict]:
+    """Get user's open ticket or create a new one"""
+    global pool, _local_support_tickets, _local_ticket_counter
+    
+    if LOCAL_MODE:
+        # Find existing open ticket
+        for ticket in _local_support_tickets:
+            if ticket['user_id'] == user_id and ticket['status'] == 'open':
+                return ticket
+        # Create new ticket
+        _local_ticket_counter += 1
+        ticket = {
+            'id': _local_ticket_counter,
+            'user_id': user_id,
+            'status': 'open',
+            'created_at': datetime.now(),
+            'updated_at': datetime.now()
+        }
+        _local_support_tickets.append(ticket)
+        return ticket
+    
+    try:
+        async with pool.acquire() as conn:
+            # Check for existing open ticket
+            ticket = await conn.fetchrow('''
+                SELECT * FROM support_tickets 
+                WHERE user_id = $1 AND status = 'open'
+                ORDER BY created_at DESC LIMIT 1
+            ''', user_id)
+            
+            if ticket:
+                return dict(ticket)
+            
+            # Create new ticket
+            ticket = await conn.fetchrow('''
+                INSERT INTO support_tickets (user_id)
+                VALUES ($1)
+                RETURNING *
+            ''', user_id)
+            return dict(ticket) if ticket else None
+    except Exception as e:
+        print(f"Error getting/creating ticket: {e}")
+        return None
+
+
+async def get_ticket_messages(ticket_id: int, limit: int = 50) -> list:
+    """Get messages for a ticket"""
+    global pool, _local_support_messages
+    
+    if LOCAL_MODE:
+        messages = [m for m in _local_support_messages if m['ticket_id'] == ticket_id]
+        return sorted(messages, key=lambda x: x['created_at'])[-limit:]
+    
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch('''
+                SELECT m.*, u.username as sender_name
+                FROM support_messages m
+                JOIN users u ON m.sender_id = u.id
+                WHERE m.ticket_id = $1
+                ORDER BY m.created_at ASC
+                LIMIT $2
+            ''', ticket_id, limit)
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error getting messages: {e}")
+        return []
+
+
+async def add_support_message(ticket_id: int, sender_id: int, sender_type: str, message: str) -> Optional[dict]:
+    """Add a message to a ticket"""
+    global pool, _local_support_messages, _local_message_counter, _local_support_tickets
+    
+    if LOCAL_MODE:
+        _local_message_counter += 1
+        # Get sender name
+        sender_name = 'Unknown'
+        if sender_id in _local_users:
+            sender_name = _local_users[sender_id]['username']
+        
+        msg = {
+            'id': _local_message_counter,
+            'ticket_id': ticket_id,
+            'sender_id': sender_id,
+            'sender_type': sender_type,
+            'sender_name': sender_name,
+            'message': message,
+            'created_at': datetime.now()
+        }
+        _local_support_messages.append(msg)
+        
+        # Update ticket updated_at
+        for ticket in _local_support_tickets:
+            if ticket['id'] == ticket_id:
+                ticket['updated_at'] = datetime.now()
+                break
+        
+        return msg
+    
+    try:
+        async with pool.acquire() as conn:
+            # Add message
+            row = await conn.fetchrow('''
+                INSERT INTO support_messages (ticket_id, sender_id, sender_type, message)
+                VALUES ($1, $2, $3, $4)
+                RETURNING *
+            ''', ticket_id, sender_id, sender_type, message)
+            
+            # Update ticket timestamp
+            await conn.execute('''
+                UPDATE support_tickets SET updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+            ''', ticket_id)
+            
+            if row:
+                result = dict(row)
+                # Get sender name
+                sender = await conn.fetchrow('SELECT username FROM users WHERE id = $1', sender_id)
+                result['sender_name'] = sender['username'] if sender else 'Unknown'
+                return result
+            return None
+    except Exception as e:
+        print(f"Error adding message: {e}")
+        return None
+
+
+async def get_open_tickets() -> list:
+    """Get all open support tickets (for staff)"""
+    global pool, _local_support_tickets, _local_users
+    
+    if LOCAL_MODE:
+        result = []
+        for ticket in _local_support_tickets:
+            if ticket['status'] == 'open':
+                user = _local_users.get(ticket['user_id'], {})
+                # Get last message
+                messages = [m for m in _local_support_messages if m['ticket_id'] == ticket['id']]
+                last_msg = messages[-1] if messages else None
+                result.append({
+                    **ticket,
+                    'username': user.get('username', 'Unknown'),
+                    'last_message': last_msg['message'][:50] if last_msg else None,
+                    'message_count': len(messages)
+                })
+        return sorted(result, key=lambda x: x['updated_at'], reverse=True)
+    
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch('''
+                SELECT t.*, u.username,
+                       (SELECT message FROM support_messages WHERE ticket_id = t.id ORDER BY created_at DESC LIMIT 1) as last_message,
+                       (SELECT COUNT(*) FROM support_messages WHERE ticket_id = t.id) as message_count
+                FROM support_tickets t
+                JOIN users u ON t.user_id = u.id
+                WHERE t.status = 'open'
+                ORDER BY t.updated_at DESC
+            ''')
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error getting open tickets: {e}")
+        return []
+
+
+async def close_ticket(ticket_id: int) -> bool:
+    """Close a support ticket"""
+    global pool, _local_support_tickets
+    
+    if LOCAL_MODE:
+        for ticket in _local_support_tickets:
+            if ticket['id'] == ticket_id:
+                ticket['status'] = 'closed'
+                ticket['closed_at'] = datetime.now()
+                return True
+        return False
+    
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute('''
+                UPDATE support_tickets 
+                SET status = 'closed', closed_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+            ''', ticket_id)
+            return True
+    except Exception as e:
+        print(f"Error closing ticket: {e}")
+        return False
+
+
+async def get_ticket_by_id(ticket_id: int) -> Optional[dict]:
+    """Get a specific ticket"""
+    global pool, _local_support_tickets
+    
+    if LOCAL_MODE:
+        for ticket in _local_support_tickets:
+            if ticket['id'] == ticket_id:
+                return ticket
+        return None
+    
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow('''
+                SELECT t.*, u.username
+                FROM support_tickets t
+                JOIN users u ON t.user_id = u.id
+                WHERE t.id = $1
+            ''', ticket_id)
+            return dict(row) if row else None
+    except Exception as e:
+        print(f"Error getting ticket: {e}")
         return None

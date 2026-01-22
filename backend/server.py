@@ -1580,6 +1580,122 @@ async def get_history():
     return {"history": state.history[:50]}  # Last 50 fights
 
 
+# ============ SUPPORT TICKET ENDPOINTS ============
+
+class SupportMessage(BaseModel):
+    message: str
+
+
+@app.get("/support/ticket")
+async def get_my_ticket(user_id: int):
+    """Get or create user's support ticket"""
+    ticket = await db.get_or_create_ticket(user_id)
+    if not ticket:
+        raise HTTPException(status_code=500, detail="Failed to get ticket")
+    
+    messages = await db.get_ticket_messages(ticket['id'])
+    return {"ticket": ticket, "messages": messages}
+
+
+@app.post("/support/send")
+async def send_support_message(data: SupportMessage, user_id: int):
+    """Send a support message"""
+    if not data.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    
+    # Get or create ticket
+    ticket = await db.get_or_create_ticket(user_id)
+    if not ticket:
+        raise HTTPException(status_code=500, detail="Failed to get ticket")
+    
+    # Get user info
+    user = await db.get_user_by_id(user_id)
+    sender_type = user.get('role', 'user') if user else 'user'
+    
+    # Add message
+    message = await db.add_support_message(
+        ticket['id'], 
+        user_id, 
+        sender_type, 
+        data.message.strip()
+    )
+    
+    if not message:
+        raise HTTPException(status_code=500, detail="Failed to send message")
+    
+    # Broadcast to all connected clients (staff will filter)
+    await manager.broadcast({
+        "type": "support_message",
+        "ticket_id": ticket['id'],
+        "message": message
+    })
+    
+    return {"success": True, "message": message}
+
+
+@app.post("/support/reply/{ticket_id}")
+async def reply_to_ticket(ticket_id: int, data: SupportMessage, staff_id: int):
+    """Staff reply to a support ticket"""
+    if not data.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    
+    # Get staff info
+    staff = await db.get_user_by_id(staff_id)
+    if not staff or staff.get('role') not in ['admin', 'cashier']:
+        raise HTTPException(status_code=403, detail="Staff only")
+    
+    # Add message
+    message = await db.add_support_message(
+        ticket_id, 
+        staff_id, 
+        'staff', 
+        data.message.strip()
+    )
+    
+    if not message:
+        raise HTTPException(status_code=500, detail="Failed to send message")
+    
+    # Get ticket to know user_id
+    ticket = await db.get_ticket_by_id(ticket_id)
+    
+    # Broadcast to all connected clients
+    await manager.broadcast({
+        "type": "support_message",
+        "ticket_id": ticket_id,
+        "user_id": ticket['user_id'] if ticket else None,
+        "message": message
+    })
+    
+    return {"success": True, "message": message}
+
+
+@app.get("/support/tickets")
+async def get_open_tickets():
+    """Get all open support tickets (staff only)"""
+    tickets = await db.get_open_tickets()
+    return {"tickets": tickets}
+
+
+@app.get("/support/ticket/{ticket_id}/messages")
+async def get_ticket_messages(ticket_id: int):
+    """Get messages for a specific ticket"""
+    messages = await db.get_ticket_messages(ticket_id)
+    ticket = await db.get_ticket_by_id(ticket_id)
+    return {"ticket": ticket, "messages": messages}
+
+
+@app.post("/support/ticket/{ticket_id}/close")
+async def close_support_ticket(ticket_id: int):
+    """Close a support ticket"""
+    success = await db.close_ticket(ticket_id)
+    if success:
+        await manager.broadcast({
+            "type": "ticket_closed",
+            "ticket_id": ticket_id
+        })
+    return {"success": success}
+
+
 # WebSocket Endpoint
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -1626,6 +1742,16 @@ async def websocket_endpoint(websocket: WebSocket):
             elif data.get("type") == "remove_bet":
                 state.bets = [b for b in state.bets if b["id"] != data["id"]]
                 await broadcast_state()
+            
+            # Support chat typing indicator
+            elif data.get("type") == "support_typing":
+                await manager.broadcast({
+                    "type": "support_typing",
+                    "ticket_id": data.get("ticket_id"),
+                    "user_id": data.get("user_id"),
+                    "is_typing": data.get("is_typing", False),
+                    "sender_type": data.get("sender_type", "user")
+                })
                 
     except WebSocketDisconnect:
         manager.disconnect(websocket)

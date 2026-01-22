@@ -774,7 +774,7 @@ class PisoperyaAutomation:
         
         try:
             # Try to get the video.js player source
-            stream_url = await self.page.evaluate('''() => {
+            stream_url = await self.page.evaluate(r'''() => {
                 // Try video.js player
                 const player = document.querySelector('.video-js');
                 if (player && player.player) {

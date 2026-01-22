@@ -57,6 +57,23 @@ function App() {
   // Mobile Menu
   const [showMobileMenu, setShowMobileMenu] = useState(false)
   
+  // Support Chat State
+  const [showSupportChat, setShowSupportChat] = useState(false)
+  const [supportTicket, setSupportTicket] = useState(null)
+  const [supportMessages, setSupportMessages] = useState([])
+  const [supportInput, setSupportInput] = useState('')
+  const [supportLoading, setSupportLoading] = useState(false)
+  const [isTyping, setIsTyping] = useState(false)
+  const [remoteTyping, setRemoteTyping] = useState(false)
+  const typingTimeoutRef = useRef(null)
+  const chatEndRef = useRef(null)
+  
+  // Staff: Support Tickets List
+  const [supportTickets, setSupportTickets] = useState([])
+  const [activeTicket, setActiveTicket] = useState(null)
+  const [activeTicketMessages, setActiveTicketMessages] = useState([])
+  const [staffReplyInput, setStaffReplyInput] = useState('')
+  
   // Computed - Role based access
   const userRole = currentUser?.role || 'user' // 'user', 'cashier', 'admin'
   const isAdmin = userRole === 'admin'
@@ -748,6 +765,167 @@ function App() {
     }
   }
 
+  // ===== SUPPORT CHAT FUNCTIONS =====
+  
+  // Open support chat (user)
+  const openSupportChat = async () => {
+    if (!currentUser) {
+      setShowAuthModal(true)
+      return
+    }
+    
+    setShowSupportChat(true)
+    setSupportLoading(true)
+    
+    try {
+      const response = await fetch(`${API_URL}/support/ticket?user_id=${currentUser.id}`)
+      const data = await response.json()
+      
+      if (data.ticket) {
+        setSupportTicket(data.ticket)
+        setSupportMessages(data.messages || [])
+      }
+    } catch (error) {
+      console.error('Failed to load support chat:', error)
+    }
+    
+    setSupportLoading(false)
+  }
+  
+  // Send support message (user)
+  const sendSupportMessage = async () => {
+    if (!supportInput.trim() || !currentUser) return
+    
+    const message = supportInput.trim()
+    setSupportInput('')
+    
+    try {
+      const response = await fetch(`${API_URL}/support/send?user_id=${currentUser.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message })
+      })
+      
+      if (!response.ok) {
+        setSupportInput(message) // Restore on error
+      }
+    } catch (error) {
+      console.error('Failed to send message:', error)
+      setSupportInput(message)
+    }
+    
+    // Clear typing indicator
+    sendTypingIndicator(false)
+  }
+  
+  // Send typing indicator
+  const sendTypingIndicator = (typing) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'support_typing',
+        ticket_id: supportTicket?.id || activeTicket?.id,
+        user_id: currentUser?.id,
+        is_typing: typing,
+        sender_type: isStaff ? 'staff' : 'user'
+      }))
+    }
+  }
+  
+  // Handle input change with typing indicator
+  const handleSupportInputChange = (value) => {
+    setSupportInput(value)
+    
+    // Send typing indicator
+    if (!isTyping && value.trim()) {
+      setIsTyping(true)
+      sendTypingIndicator(true)
+    }
+    
+    // Clear typing after delay
+    clearTimeout(typingTimeoutRef.current)
+    typingTimeoutRef.current = setTimeout(() => {
+      setIsTyping(false)
+      sendTypingIndicator(false)
+    }, 2000)
+  }
+  
+  // Staff: Load open tickets
+  const loadSupportTickets = async () => {
+    try {
+      const response = await fetch(`${API_URL}/support/tickets`)
+      const data = await response.json()
+      setSupportTickets(data.tickets || [])
+    } catch (error) {
+      console.error('Failed to load tickets:', error)
+    }
+  }
+  
+  // Staff: Open a ticket
+  const openTicket = async (ticket) => {
+    setActiveTicket(ticket)
+    
+    try {
+      const response = await fetch(`${API_URL}/support/ticket/${ticket.id}/messages`)
+      const data = await response.json()
+      setActiveTicketMessages(data.messages || [])
+    } catch (error) {
+      console.error('Failed to load ticket messages:', error)
+    }
+  }
+  
+  // Staff: Send reply
+  const sendStaffReply = async () => {
+    if (!staffReplyInput.trim() || !activeTicket || !currentUser) return
+    
+    const message = staffReplyInput.trim()
+    setStaffReplyInput('')
+    
+    try {
+      const response = await fetch(`${API_URL}/support/reply/${activeTicket.id}?staff_id=${currentUser.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message })
+      })
+      
+      if (!response.ok) {
+        setStaffReplyInput(message)
+      }
+    } catch (error) {
+      console.error('Failed to send reply:', error)
+      setStaffReplyInput(message)
+    }
+    
+    sendTypingIndicator(false)
+  }
+  
+  // Staff: Close ticket
+  const closeTicket = async (ticketId) => {
+    try {
+      await fetch(`${API_URL}/support/ticket/${ticketId}/close`, { method: 'POST' })
+      setSupportTickets(prev => prev.filter(t => t.id !== ticketId))
+      if (activeTicket?.id === ticketId) {
+        setActiveTicket(null)
+        setActiveTicketMessages([])
+      }
+    } catch (error) {
+      console.error('Failed to close ticket:', error)
+    }
+  }
+  
+  // Auto-scroll to bottom of chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [supportMessages, activeTicketMessages])
+  
+  // Load support tickets for staff
+  useEffect(() => {
+    if (isStaff) {
+      loadSupportTickets()
+      const interval = setInterval(loadSupportTickets, 15000)
+      return () => clearInterval(interval)
+    }
+  }, [isStaff])
+
   // Audio functions
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current) {
@@ -1238,6 +1416,60 @@ function App() {
             localStorage.setItem('sabong_user', JSON.stringify(updated))
             return updated
           })
+        }
+        break
+        
+      case 'support_message':
+        // Handle incoming support message
+        if (data.message) {
+          // For user: add to their chat if ticket matches
+          if (!isStaff && supportTicket?.id === data.ticket_id) {
+            setSupportMessages(prev => [...prev, data.message])
+            playSound('bet') // Notification sound
+          }
+          // For staff: add to active ticket if open
+          if (isStaff && activeTicket?.id === data.ticket_id) {
+            setActiveTicketMessages(prev => [...prev, data.message])
+            playSound('bet')
+          }
+          // Update ticket list for staff
+          if (isStaff) {
+            loadSupportTickets()
+          }
+        }
+        setRemoteTyping(false)
+        break
+        
+      case 'support_typing':
+        // Show typing indicator
+        if (data.is_typing) {
+          // User sees staff typing
+          if (!isStaff && supportTicket?.id === data.ticket_id && data.sender_type === 'staff') {
+            setRemoteTyping(true)
+            setTimeout(() => setRemoteTyping(false), 3000)
+          }
+          // Staff sees user typing
+          if (isStaff && activeTicket?.id === data.ticket_id && data.sender_type === 'user') {
+            setRemoteTyping(true)
+            setTimeout(() => setRemoteTyping(false), 3000)
+          }
+        }
+        break
+        
+      case 'ticket_closed':
+        // Handle ticket closed
+        if (!isStaff && supportTicket?.id === data.ticket_id) {
+          setSupportTicket(null)
+          setSupportMessages([])
+          setShowSupportChat(false)
+          alert('Support ticket has been closed by staff.')
+        }
+        if (isStaff) {
+          setSupportTickets(prev => prev.filter(t => t.id !== data.ticket_id))
+          if (activeTicket?.id === data.ticket_id) {
+            setActiveTicket(null)
+            setActiveTicketMessages([])
+          }
         }
         break
     }
@@ -1860,6 +2092,80 @@ function App() {
         </div>
       )}
       
+      {/* Support Chat (User) */}
+      {showSupportChat && !isStaff && (
+        <div className="support-chat-container">
+          <div className="support-chat">
+            <div className="support-header">
+              <div className="support-title">
+                <span className="support-icon">💬</span>
+                <span>Support Chat</span>
+              </div>
+              <button className="support-close" onClick={() => setShowSupportChat(false)}>×</button>
+            </div>
+            
+            <div className="support-messages">
+              {supportLoading ? (
+                <div className="support-loading">
+                  <div className="loading-spinner"></div>
+                  <span>Loading...</span>
+                </div>
+              ) : supportMessages.length === 0 ? (
+                <div className="support-empty">
+                  <span className="empty-icon">👋</span>
+                  <p>Hi! How can we help you?</p>
+                  <p className="empty-hint">Send a message to start chatting with support.</p>
+                </div>
+              ) : (
+                <>
+                  {supportMessages.map((msg, idx) => (
+                    <div 
+                      key={idx} 
+                      className={`support-message ${msg.sender_type === 'user' ? 'sent' : 'received'}`}
+                    >
+                      {msg.sender_type !== 'user' && (
+                        <span className="message-sender">Support</span>
+                      )}
+                      <div className="message-bubble">
+                        {msg.message}
+                      </div>
+                      <span className="message-time">
+                        {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  ))}
+                  {remoteTyping && (
+                    <div className="typing-indicator">
+                      <span className="typing-dot"></span>
+                      <span className="typing-dot"></span>
+                      <span className="typing-dot"></span>
+                    </div>
+                  )}
+                  <div ref={chatEndRef} />
+                </>
+              )}
+            </div>
+            
+            <div className="support-input-area">
+              <input
+                type="text"
+                placeholder="Type your message..."
+                value={supportInput}
+                onChange={(e) => handleSupportInputChange(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && sendSupportMessage()}
+              />
+              <button 
+                className="send-btn"
+                onClick={sendSupportMessage}
+                disabled={!supportInput.trim()}
+              >
+                ➤
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
       {/* Stream Cookie Modal (Admin) */}
       {showCookieModal && (
         <div className="modal-overlay" onClick={() => setShowCookieModal(false)}>
@@ -2178,6 +2484,110 @@ OR cookie string: session=abc123; token=xyz456'
                       )}
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          </div>
+          
+          {/* Support Tickets Section */}
+          <div className="cashier-support-section">
+            <div className="support-section-header">
+              <h2>💬 Support Tickets</h2>
+              <span className="ticket-count">{supportTickets.length} open</span>
+            </div>
+            
+            <div className="support-tickets-container">
+              {/* Tickets List */}
+              <div className="tickets-list">
+                {supportTickets.length === 0 ? (
+                  <div className="empty-state small">
+                    <span className="empty-icon">✅</span>
+                    <p>No open tickets</p>
+                  </div>
+                ) : (
+                  supportTickets.map(ticket => (
+                    <div 
+                      key={ticket.id} 
+                      className={`ticket-item ${activeTicket?.id === ticket.id ? 'active' : ''}`}
+                      onClick={() => openTicket(ticket)}
+                    >
+                      <div className="ticket-user">
+                        <span className="user-avatar small">{ticket.username?.charAt(0).toUpperCase()}</span>
+                        <div className="ticket-info">
+                          <span className="ticket-username">{ticket.username}</span>
+                          <span className="ticket-preview">{ticket.last_message?.substring(0, 30)}...</span>
+                        </div>
+                      </div>
+                      <div className="ticket-meta">
+                        <span className="message-count">{ticket.message_count}</span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+              
+              {/* Active Ticket Chat */}
+              {activeTicket && (
+                <div className="ticket-chat">
+                  <div className="ticket-chat-header">
+                    <div className="chat-user-info">
+                      <span className="user-avatar">{activeTicket.username?.charAt(0).toUpperCase()}</span>
+                      <span className="chat-username">{activeTicket.username}</span>
+                    </div>
+                    <button 
+                      className="close-ticket-btn"
+                      onClick={() => closeTicket(activeTicket.id)}
+                    >
+                      Close Ticket
+                    </button>
+                  </div>
+                  
+                  <div className="ticket-messages">
+                    {activeTicketMessages.map((msg, idx) => (
+                      <div 
+                        key={idx} 
+                        className={`chat-message ${msg.sender_type === 'staff' ? 'sent' : 'received'}`}
+                      >
+                        {msg.sender_type !== 'staff' && (
+                          <span className="msg-sender">{msg.sender_name}</span>
+                        )}
+                        <div className="msg-bubble">
+                          {msg.message}
+                        </div>
+                        <span className="msg-time">
+                          {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                    ))}
+                    {remoteTyping && (
+                      <div className="typing-indicator">
+                        <span className="typing-dot"></span>
+                        <span className="typing-dot"></span>
+                        <span className="typing-dot"></span>
+                      </div>
+                    )}
+                    <div ref={chatEndRef} />
+                  </div>
+                  
+                  <div className="ticket-reply-area">
+                    <input
+                      type="text"
+                      placeholder="Type your reply..."
+                      value={staffReplyInput}
+                      onChange={(e) => {
+                        setStaffReplyInput(e.target.value)
+                        handleSupportInputChange(e.target.value)
+                      }}
+                      onKeyPress={(e) => e.key === 'Enter' && sendStaffReply()}
+                    />
+                    <button 
+                      className="send-reply-btn"
+                      onClick={sendStaffReply}
+                      disabled={!staffReplyInput.trim()}
+                    >
+                      Send
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -2834,6 +3244,13 @@ OR cookie string: session=abc123; token=xyz456'
           </div>
         </div>
       </main>
+      )}
+
+      {/* Floating Support Button (Users only) */}
+      {currentUser && !isStaff && !showSupportChat && (
+        <button className="floating-support-btn" onClick={openSupportChat}>
+          💬
+        </button>
       )}
 
       <footer className="footer">
