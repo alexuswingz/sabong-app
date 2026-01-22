@@ -769,6 +769,9 @@ function App() {
 
   // ===== SUPPORT CHAT FUNCTIONS =====
   
+  // Ref for staff chat scroll
+  const staffChatEndRef = useRef(null)
+  
   // Open support chat (user)
   const openSupportChat = async () => {
     if (!currentUser) {
@@ -794,11 +797,24 @@ function App() {
     setSupportLoading(false)
   }
   
-  // Send support message (user)
+  // Send support message (user) - with optimistic update
   const sendSupportMessage = async () => {
     if (!supportInput.trim() || !currentUser) return
     
     const message = supportInput.trim()
+    const tempId = Date.now()
+    
+    // Optimistic update - show message immediately
+    const optimisticMessage = {
+      id: tempId,
+      message: message,
+      sender_id: currentUser.id,
+      sender_type: 'user',
+      sender_name: currentUser.username,
+      created_at: new Date().toISOString(),
+      pending: true
+    }
+    setSupportMessages(prev => [...prev, optimisticMessage])
     setSupportInput('')
     
     try {
@@ -809,10 +825,18 @@ function App() {
       })
       
       if (!response.ok) {
-        setSupportInput(message) // Restore on error
+        // Remove optimistic message on error
+        setSupportMessages(prev => prev.filter(m => m.id !== tempId))
+        setSupportInput(message)
+      } else {
+        // Mark as sent (remove pending flag)
+        setSupportMessages(prev => prev.map(m => 
+          m.id === tempId ? { ...m, pending: false } : m
+        ))
       }
     } catch (error) {
       console.error('Failed to send message:', error)
+      setSupportMessages(prev => prev.filter(m => m.id !== tempId))
       setSupportInput(message)
     }
     
@@ -834,8 +858,12 @@ function App() {
   }
   
   // Handle input change with typing indicator
-  const handleSupportInputChange = (value) => {
-    setSupportInput(value)
+  const handleSupportInputChange = (value, isStaff = false) => {
+    if (isStaff) {
+      setStaffReplyInput(value)
+    } else {
+      setSupportInput(value)
+    }
     
     // Send typing indicator
     if (!isTyping && value.trim()) {
@@ -865,6 +893,7 @@ function App() {
   // Staff: Open a ticket
   const openTicket = async (ticket) => {
     setActiveTicket(ticket)
+    setActiveTicketMessages([]) // Clear first for better UX
     
     try {
       const response = await fetch(`${API_URL}/support/ticket/${ticket.id}/messages`)
@@ -875,11 +904,24 @@ function App() {
     }
   }
   
-  // Staff: Send reply
+  // Staff: Send reply - with optimistic update
   const sendStaffReply = async () => {
     if (!staffReplyInput.trim() || !activeTicket || !currentUser) return
     
     const message = staffReplyInput.trim()
+    const tempId = Date.now()
+    
+    // Optimistic update
+    const optimisticMessage = {
+      id: tempId,
+      message: message,
+      sender_id: currentUser.id,
+      sender_type: 'staff',
+      sender_name: currentUser.username,
+      created_at: new Date().toISOString(),
+      pending: true
+    }
+    setActiveTicketMessages(prev => [...prev, optimisticMessage])
     setStaffReplyInput('')
     
     try {
@@ -890,10 +932,16 @@ function App() {
       })
       
       if (!response.ok) {
+        setActiveTicketMessages(prev => prev.filter(m => m.id !== tempId))
         setStaffReplyInput(message)
+      } else {
+        setActiveTicketMessages(prev => prev.map(m => 
+          m.id === tempId ? { ...m, pending: false } : m
+        ))
       }
     } catch (error) {
       console.error('Failed to send reply:', error)
+      setActiveTicketMessages(prev => prev.filter(m => m.id !== tempId))
       setStaffReplyInput(message)
     }
     
@@ -902,6 +950,8 @@ function App() {
   
   // Staff: Close ticket
   const closeTicket = async (ticketId) => {
+    if (!confirm('Close this support ticket?')) return
+    
     try {
       await fetch(`${API_URL}/support/ticket/${ticketId}/close`, { method: 'POST' })
       setSupportTickets(prev => prev.filter(t => t.id !== ticketId))
@@ -916,17 +966,25 @@ function App() {
   
   // Auto-scroll to bottom of chat
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [supportMessages, activeTicketMessages])
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [supportMessages])
+  
+  useEffect(() => {
+    if (staffChatEndRef.current) {
+      staffChatEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [activeTicketMessages])
   
   // Load support tickets for support staff
   useEffect(() => {
-    if (canHandleSupport) {
+    if (canHandleSupport && currentUser) {
       loadSupportTickets()
-      const interval = setInterval(loadSupportTickets, 15000)
+      const interval = setInterval(loadSupportTickets, 10000) // Faster refresh
       return () => clearInterval(interval)
     }
-  }, [canHandleSupport])
+  }, [canHandleSupport, currentUser])
 
   // Audio functions
   const getAudioContext = useCallback(() => {
@@ -1424,16 +1482,48 @@ function App() {
       case 'support_message':
         // Handle incoming support message
         if (data.message) {
-          // For user: add to their chat if ticket matches
+          const newMsg = data.message
+          
+          // For user: add to their chat if ticket matches (avoid duplicates)
           if (!canHandleSupport && supportTicket?.id === data.ticket_id) {
-            setSupportMessages(prev => [...prev, data.message])
-            playSound('bet') // Notification sound
+            // Only add if it's from staff OR if the message ID is different from our optimistic ones
+            if (newMsg.sender_type === 'staff' || newMsg.sender_id !== currentUser?.id) {
+              setSupportMessages(prev => {
+                // Check if message already exists (avoid duplicates)
+                const exists = prev.some(m => m.id === newMsg.id || 
+                  (m.message === newMsg.message && m.sender_id === newMsg.sender_id && m.pending))
+                if (exists) {
+                  // Replace pending message with real one
+                  return prev.map(m => 
+                    (m.message === newMsg.message && m.sender_id === newMsg.sender_id && m.pending) 
+                      ? newMsg : m
+                  )
+                }
+                return [...prev, newMsg]
+              })
+              playSound('bet') // Notification sound
+            }
           }
-          // For support staff: add to active ticket if open
+          
+          // For support staff: add to active ticket if open (avoid duplicates)
           if (canHandleSupport && activeTicket?.id === data.ticket_id) {
-            setActiveTicketMessages(prev => [...prev, data.message])
-            playSound('bet')
+            // Only add if it's from user OR if it's not our own message
+            if (newMsg.sender_type === 'user' || newMsg.sender_id !== currentUser?.id) {
+              setActiveTicketMessages(prev => {
+                const exists = prev.some(m => m.id === newMsg.id ||
+                  (m.message === newMsg.message && m.sender_id === newMsg.sender_id && m.pending))
+                if (exists) {
+                  return prev.map(m =>
+                    (m.message === newMsg.message && m.sender_id === newMsg.sender_id && m.pending)
+                      ? newMsg : m
+                  )
+                }
+                return [...prev, newMsg]
+              })
+              playSound('bet')
+            }
           }
+          
           // Update ticket list for support staff
           if (canHandleSupport) {
             loadSupportTickets()
@@ -2096,72 +2186,102 @@ function App() {
       
       {/* Support Chat (Regular users only) */}
       {showSupportChat && !canHandleSupport && (
-        <div className="support-chat-container">
-          <div className="support-chat">
-            <div className="support-header">
-              <div className="support-title">
-                <span className="support-icon">💬</span>
-                <span>Support Chat</span>
+        <div className="support-chat-overlay">
+          <div className="support-chat-modern">
+            <div className="support-chat-header">
+              <div className="support-chat-header-left">
+                <div className="support-avatar">
+                  <span>💬</span>
+                </div>
+                <div className="support-header-info">
+                  <h3>Support Chat</h3>
+                  <span className="support-status">
+                    <span className="status-dot online"></span>
+                    We typically reply instantly
+                  </span>
+                </div>
               </div>
-              <button className="support-close" onClick={() => setShowSupportChat(false)}>×</button>
+              <button className="support-close-btn" onClick={() => setShowSupportChat(false)}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </button>
             </div>
             
-            <div className="support-messages">
+            <div className="support-chat-messages">
               {supportLoading ? (
-                <div className="support-loading">
-                  <div className="loading-spinner"></div>
-                  <span>Loading...</span>
+                <div className="support-loading-state">
+                  <div className="loading-spinner-modern"></div>
+                  <span>Connecting...</span>
                 </div>
               ) : supportMessages.length === 0 ? (
-                <div className="support-empty">
-                  <span className="empty-icon">👋</span>
-                  <p>Hi! How can we help you?</p>
-                  <p className="empty-hint">Send a message to start chatting with support.</p>
+                <div className="support-welcome">
+                  <div className="welcome-icon">👋</div>
+                  <h4>Hi there!</h4>
+                  <p>How can we help you today?</p>
+                  <p className="welcome-hint">Send us a message and we'll get back to you as soon as possible.</p>
                 </div>
               ) : (
-                <>
+                <div className="messages-container">
                   {supportMessages.map((msg, idx) => (
                     <div 
-                      key={idx} 
-                      className={`support-message ${msg.sender_type === 'user' ? 'sent' : 'received'}`}
+                      key={msg.id || idx} 
+                      className={`chat-message ${msg.sender_type === 'user' ? 'outgoing' : 'incoming'} ${msg.pending ? 'pending' : ''}`}
                     >
                       {msg.sender_type !== 'user' && (
-                        <span className="message-sender">Support</span>
+                        <div className="message-avatar">
+                          <span>👤</span>
+                        </div>
                       )}
-                      <div className="message-bubble">
-                        {msg.message}
+                      <div className="message-content">
+                        {msg.sender_type !== 'user' && (
+                          <span className="sender-label">Support Agent</span>
+                        )}
+                        <div className="message-text">
+                          {msg.message}
+                        </div>
+                        <span className="message-timestamp">
+                          {msg.pending ? '⏳ Sending...' : new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
                       </div>
-                      <span className="message-time">
-                        {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
                     </div>
                   ))}
                   {remoteTyping && (
-                    <div className="typing-indicator">
-                      <span className="typing-dot"></span>
-                      <span className="typing-dot"></span>
-                      <span className="typing-dot"></span>
+                    <div className="chat-message incoming">
+                      <div className="message-avatar">
+                        <span>👤</span>
+                      </div>
+                      <div className="typing-bubble">
+                        <span className="dot"></span>
+                        <span className="dot"></span>
+                        <span className="dot"></span>
+                      </div>
                     </div>
                   )}
                   <div ref={chatEndRef} />
-                </>
+                </div>
               )}
             </div>
             
-            <div className="support-input-area">
+            <div className="support-chat-input">
               <input
                 type="text"
-                placeholder="Type your message..."
+                placeholder="Type a message..."
                 value={supportInput}
                 onChange={(e) => handleSupportInputChange(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && sendSupportMessage()}
+                autoFocus
               />
               <button 
-                className="send-btn"
+                className="send-message-btn"
                 onClick={sendSupportMessage}
                 disabled={!supportInput.trim()}
               >
-                ➤
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="22" y1="2" x2="11" y2="13"></line>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
               </button>
             </div>
           </div>
@@ -2399,8 +2519,8 @@ OR cookie string: session=abc123; token=xyz456'
                   <div className="chat-messages-area">
                     {activeTicketMessages.map((msg, idx) => (
                       <div 
-                        key={idx} 
-                        className={`chat-msg ${msg.sender_type === 'staff' ? 'outgoing' : 'incoming'}`}
+                        key={msg.id || idx} 
+                        className={`chat-msg ${msg.sender_type === 'staff' ? 'outgoing' : 'incoming'} ${msg.pending ? 'pending' : ''}`}
                       >
                         {msg.sender_type !== 'staff' && (
                           <span className="msg-sender-name">{msg.sender_name}</span>
@@ -2409,7 +2529,7 @@ OR cookie string: session=abc123; token=xyz456'
                           {msg.message}
                         </div>
                         <span className="msg-timestamp">
-                          {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {msg.pending ? '⏳ Sending...' : new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
                     ))}
@@ -2420,7 +2540,7 @@ OR cookie string: session=abc123; token=xyz456'
                         <span className="typing-dot"></span>
                       </div>
                     )}
-                    <div ref={chatEndRef} />
+                    <div ref={staffChatEndRef} />
                   </div>
                   
                   <div className="chat-input-area">
@@ -2428,10 +2548,7 @@ OR cookie string: session=abc123; token=xyz456'
                       type="text"
                       placeholder="Type your reply..."
                       value={staffReplyInput}
-                      onChange={(e) => {
-                        setStaffReplyInput(e.target.value)
-                        handleSupportInputChange(e.target.value)
-                      }}
+                      onChange={(e) => handleSupportInputChange(e.target.value, true)}
                       onKeyPress={(e) => e.key === 'Enter' && sendStaffReply()}
                     />
                     <button 
@@ -2694,8 +2811,8 @@ OR cookie string: session=abc123; token=xyz456'
                   <div className="ticket-messages">
                     {activeTicketMessages.map((msg, idx) => (
                       <div 
-                        key={idx} 
-                        className={`chat-message ${msg.sender_type === 'staff' ? 'sent' : 'received'}`}
+                        key={msg.id || idx} 
+                        className={`chat-message ${msg.sender_type === 'staff' ? 'sent' : 'received'} ${msg.pending ? 'pending' : ''}`}
                       >
                         {msg.sender_type !== 'staff' && (
                           <span className="msg-sender">{msg.sender_name}</span>
@@ -2704,7 +2821,7 @@ OR cookie string: session=abc123; token=xyz456'
                           {msg.message}
                         </div>
                         <span className="msg-time">
-                          {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {msg.pending ? '⏳ Sending...' : new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
                       </div>
                     ))}
@@ -2715,7 +2832,7 @@ OR cookie string: session=abc123; token=xyz456'
                         <span className="typing-dot"></span>
                       </div>
                     )}
-                    <div ref={chatEndRef} />
+                    <div ref={staffChatEndRef} />
                   </div>
                   
                   <div className="ticket-reply-area">
@@ -2723,10 +2840,7 @@ OR cookie string: session=abc123; token=xyz456'
                       type="text"
                       placeholder="Type your reply..."
                       value={staffReplyInput}
-                      onChange={(e) => {
-                        setStaffReplyInput(e.target.value)
-                        handleSupportInputChange(e.target.value)
-                      }}
+                      onChange={(e) => handleSupportInputChange(e.target.value, true)}
                       onKeyPress={(e) => e.key === 'Enter' && sendStaffReply()}
                     />
                     <button 

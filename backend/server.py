@@ -1641,7 +1641,7 @@ async def reply_to_ticket(ticket_id: int, data: SupportMessage, staff_id: int):
     
     # Get staff info
     staff = await db.get_user_by_id(staff_id)
-    if not staff or staff.get('role') not in ['admin', 'cashier']:
+    if not staff or staff.get('role') not in ['admin', 'cashier', 'support']:
         raise HTTPException(status_code=403, detail="Staff only")
     
     # Add message
