@@ -760,10 +760,15 @@ function App() {
     if (isIOS && canPlayNativeHLS) {
       // Use native Safari HLS - much smoother on iPhone
       console.log('🍎 iOS detected - using native HLS playback for best performance')
+      // MUST set muted before play for autoplay to work on iOS
+      video.muted = true
+      video.playsInline = true
       video.src = streamUrl
       video.addEventListener('loadedmetadata', () => {
         console.log('✅ Native HLS loaded')
         setStreamStatus('playing')
+        // Ensure muted for autoplay policy
+        video.muted = true
         video.play().catch(e => console.log('Autoplay prevented:', e))
       })
       video.addEventListener('error', (e) => {
