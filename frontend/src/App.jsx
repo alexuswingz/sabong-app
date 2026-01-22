@@ -904,22 +904,26 @@ function App() {
         hlsRef.current.destroy()
       }
       
-      // BALANCED MODE - Smooth playback with reasonable latency
+      // OPTIMIZED FOR AUDIO-VIDEO SYNC
       const hls = new Hls({
         enableWorker: true,
-        lowLatencyMode: false,          // Disable for stability
-        backBufferLength: 30,
-        // Balanced live sync - not too far behind
-        liveSyncDurationCount: 3,        // Stay ~6sec behind live
-        liveMaxLatencyDurationCount: 8,  // Max 16sec behind before catching up
+        lowLatencyMode: false,
+        backBufferLength: 15,
+        // Live sync settings
+        liveSyncDurationCount: 3,
+        liveMaxLatencyDurationCount: 6,
         liveDurationInfinity: true,
         highBufferWatchdogPeriod: 2,
-        // Moderate buffer for smooth playback
-        maxBufferLength: 30,             // 30 seconds buffer
-        maxMaxBufferLength: 60,          // Max 60 sec buffer
-        maxBufferSize: 60 * 1000 * 1000, // 60MB buffer
-        maxBufferHole: 1,                // Allow 1sec gaps
-        // Reasonable timeouts
+        // Smaller buffers for better A/V sync
+        maxBufferLength: 15,
+        maxMaxBufferLength: 30,
+        maxBufferSize: 30 * 1000 * 1000,
+        maxBufferHole: 0.5,              // Smaller gaps for better sync
+        // Audio-Video sync settings
+        stretchShortVideoTrack: true,    // Stretch video to match audio
+        maxAudioFramesDrift: 1,          // Limit audio drift
+        forceKeyFrameOnDiscontinuity: true,
+        // Timeouts
         fragLoadingTimeOut: 20000,
         fragLoadingMaxRetry: 6,
         fragLoadingRetryDelay: 1000,
@@ -979,20 +983,25 @@ function App() {
         }
       })
       
-      // Keep stream reasonably close to live - check every 3 seconds
+      // Keep stream reasonably close to live - check every 5 seconds
       let stallCount = 0
+      let lastTime = 0
       const keepLive = setInterval(() => {
         if (video && hls.liveSyncPosition) {
           const currentTime = video.currentTime
           const livePosition = hls.liveSyncPosition
           const drift = livePosition - currentTime
           
+          // Check if video is actually progressing
+          const isProgressing = Math.abs(currentTime - lastTime) > 0.1
+          lastTime = currentTime
+          
           // Check if video is stalled (not progressing)
-          if (video.readyState < 3 || video.paused) {
+          if (!isProgressing && !video.paused) {
             stallCount++
             console.log(`⚠️ Stream may be stalling (count: ${stallCount})`)
             
-            // If stalled for too long (9+ seconds), try to recover
+            // If stalled for too long (15+ seconds), try to recover
             if (stallCount >= 3) {
               console.log('🔄 Auto-recovering stalled stream...')
               stallCount = 0
@@ -1004,13 +1013,21 @@ function App() {
             stallCount = 0
           }
           
-          // If more than 15 seconds behind, gently catch up
-          if (drift > 15) {
-            console.log(`⏩ Syncing to live (was ${drift.toFixed(1)}s behind)`)
-            video.currentTime = livePosition - 3 // Stay 3 sec behind edge for smooth buffer
+          // If more than 20 seconds behind, use playback speed to catch up (better for A/V sync)
+          if (drift > 20 && isProgressing) {
+            console.log(`⏩ Speeding up to catch live (${drift.toFixed(1)}s behind)`)
+            video.playbackRate = 1.1 // Speed up slightly instead of jumping
+          } else if (drift > 30) {
+            // Only hard jump if very far behind
+            console.log(`⏩ Jumping to live (was ${drift.toFixed(1)}s behind)`)
+            video.playbackRate = 1.0
+            video.currentTime = livePosition - 5
+          } else if (video.playbackRate !== 1.0 && drift < 10) {
+            // Return to normal speed when caught up
+            video.playbackRate = 1.0
           }
         }
-      }, 3000)
+      }, 5000)
       
       // Silent recovery - don't show any overlay during buffering
       // Just let the auto-recovery handle it in the background
@@ -2101,10 +2118,21 @@ OR cookie string: session=abc123; token=xyz456'
                   <div 
                     className="live-indicator clickable"
                     onClick={() => {
-                      // Jump to live edge when clicked
+                      // Sync to live edge when clicked - use speed up for better A/V sync
                       if (videoRef.current && hlsRef.current?.liveSyncPosition) {
-                        videoRef.current.currentTime = hlsRef.current.liveSyncPosition - 0.5
-                        console.log('⏩ Manually synced to live')
+                        const drift = hlsRef.current.liveSyncPosition - videoRef.current.currentTime
+                        if (drift > 5) {
+                          // Speed up to catch up (better for audio sync)
+                          videoRef.current.playbackRate = 1.2
+                          console.log(`⏩ Speeding up to sync (${drift.toFixed(1)}s behind)`)
+                          // Return to normal after catching up
+                          setTimeout(() => {
+                            if (videoRef.current) videoRef.current.playbackRate = 1.0
+                          }, Math.min(drift * 1000, 10000))
+                        } else {
+                          // Already close to live
+                          console.log('✅ Already synced to live')
+                        }
                       }
                     }}
                     title="Click to sync to live"
