@@ -1012,13 +1012,8 @@ function App() {
         }
       }, 3000)
       
-      // Listen for buffering events
-      video.addEventListener('waiting', () => {
-        setStreamStatus('buffering')
-      })
-      video.addEventListener('playing', () => {
-        setStreamStatus('playing')
-      })
+      // Silent recovery - don't show any overlay during buffering
+      // Just let the auto-recovery handle it in the background
       
       hlsRef.current = hls
       
@@ -2100,24 +2095,6 @@ OR cookie string: session=abc123; token=xyz456'
                   <div className="stream-loading-overlay">
                     <div className="loading-spinner large"></div>
                     <p>Loading stream...</p>
-                  </div>
-                )}
-                {streamStatus === 'buffering' && (
-                  <div className="stream-loading-overlay buffering">
-                    <div className="loading-spinner large"></div>
-                    <p>Buffering...</p>
-                    <button className="refresh-stream-btn" onClick={refreshStream}>
-                      🔄 Tap to refresh
-                    </button>
-                  </div>
-                )}
-                {streamStatus === 'error' && (
-                  <div className="stream-loading-overlay">
-                    <div className="loading-spinner large"></div>
-                    <p>Reconnecting...</p>
-                    <button className="refresh-stream-btn" onClick={refreshStream}>
-                      🔄 Tap to refresh
-                    </button>
                   </div>
                 )}
                 {streamStatus === 'playing' && (
