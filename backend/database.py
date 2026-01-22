@@ -37,7 +37,7 @@ async def init_db():
         print("   Data will be lost when server restarts!")
         LOCAL_MODE = True
         
-        # Create default admin user for local testing
+        # Create default users for local testing
         admin_hash = hash_password("admin123")
         _local_users[1] = {
             'id': 1,
@@ -48,8 +48,31 @@ async def init_db():
             'role': 'admin',
             'created_at': datetime.now()
         }
-        _local_user_counter = 1
-        print("✅ Local mode ready! Default admin: admin / admin123")
+        cashier_hash = hash_password("cashier123")
+        _local_users[2] = {
+            'id': 2,
+            'username': 'cashier',
+            'password_hash': cashier_hash,
+            'credits': 999999,
+            'is_admin': False,
+            'role': 'cashier',
+            'created_at': datetime.now()
+        }
+        support_hash = hash_password("support123")
+        _local_users[3] = {
+            'id': 3,
+            'username': 'support',
+            'password_hash': support_hash,
+            'credits': 0,
+            'is_admin': False,
+            'role': 'support',
+            'created_at': datetime.now()
+        }
+        _local_user_counter = 3
+        print("✅ Local mode ready!")
+        print("   Admin: admin / admin123")
+        print("   Cashier: cashier / cashier123")
+        print("   Support: support / support123")
         return
     
     try:
@@ -116,6 +139,18 @@ async def init_db():
                     "cashier", cashier_hash, 999999, False, "cashier"
                 )
                 print("✅ Default cashier created (username: cashier, password: cashier123)")
+            
+            # Create default support agent if not exists
+            support_exists = await conn.fetchval(
+                "SELECT COUNT(*) FROM users WHERE username = 'support'"
+            )
+            if not support_exists:
+                support_hash = hash_password("support123")
+                await conn.execute(
+                    "INSERT INTO users (username, password_hash, credits, is_admin, role) VALUES ($1, $2, $3, $4, $5)",
+                    "support", support_hash, 0, False, "support"
+                )
+                print("✅ Default support agent created (username: support, password: support123)")
         
         # Create additional tables
         await init_settings_table()

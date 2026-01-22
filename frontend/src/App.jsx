@@ -75,10 +75,12 @@ function App() {
   const [staffReplyInput, setStaffReplyInput] = useState('')
   
   // Computed - Role based access
-  const userRole = currentUser?.role || 'user' // 'user', 'cashier', 'admin'
+  const userRole = currentUser?.role || 'user' // 'user', 'cashier', 'admin', 'support'
   const isAdmin = userRole === 'admin'
   const isCashier = userRole === 'cashier'
-  const isStaff = isAdmin || isCashier // Either admin or cashier
+  const isSupport = userRole === 'support'
+  const isStaff = isAdmin || isCashier // Admin or cashier (handles money)
+  const canHandleSupport = isAdmin || isCashier || isSupport // Anyone who can answer support
   const userCredit = currentUser?.credits || 0
   const userName = currentUser?.username || ''
   
@@ -826,7 +828,7 @@ function App() {
         ticket_id: supportTicket?.id || activeTicket?.id,
         user_id: currentUser?.id,
         is_typing: typing,
-        sender_type: isStaff ? 'staff' : 'user'
+        sender_type: canHandleSupport ? 'staff' : 'user'
       }))
     }
   }
@@ -917,14 +919,14 @@ function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [supportMessages, activeTicketMessages])
   
-  // Load support tickets for staff
+  // Load support tickets for support staff
   useEffect(() => {
-    if (isStaff) {
+    if (canHandleSupport) {
       loadSupportTickets()
       const interval = setInterval(loadSupportTickets, 15000)
       return () => clearInterval(interval)
     }
-  }, [isStaff])
+  }, [canHandleSupport])
 
   // Audio functions
   const getAudioContext = useCallback(() => {
@@ -1423,17 +1425,17 @@ function App() {
         // Handle incoming support message
         if (data.message) {
           // For user: add to their chat if ticket matches
-          if (!isStaff && supportTicket?.id === data.ticket_id) {
+          if (!canHandleSupport && supportTicket?.id === data.ticket_id) {
             setSupportMessages(prev => [...prev, data.message])
             playSound('bet') // Notification sound
           }
-          // For staff: add to active ticket if open
-          if (isStaff && activeTicket?.id === data.ticket_id) {
+          // For support staff: add to active ticket if open
+          if (canHandleSupport && activeTicket?.id === data.ticket_id) {
             setActiveTicketMessages(prev => [...prev, data.message])
             playSound('bet')
           }
-          // Update ticket list for staff
-          if (isStaff) {
+          // Update ticket list for support staff
+          if (canHandleSupport) {
             loadSupportTickets()
           }
         }
@@ -1444,12 +1446,12 @@ function App() {
         // Show typing indicator
         if (data.is_typing) {
           // User sees staff typing
-          if (!isStaff && supportTicket?.id === data.ticket_id && data.sender_type === 'staff') {
+          if (!canHandleSupport && supportTicket?.id === data.ticket_id && data.sender_type === 'staff') {
             setRemoteTyping(true)
             setTimeout(() => setRemoteTyping(false), 3000)
           }
           // Staff sees user typing
-          if (isStaff && activeTicket?.id === data.ticket_id && data.sender_type === 'user') {
+          if (canHandleSupport && activeTicket?.id === data.ticket_id && data.sender_type === 'user') {
             setRemoteTyping(true)
             setTimeout(() => setRemoteTyping(false), 3000)
           }
@@ -1458,13 +1460,13 @@ function App() {
         
       case 'ticket_closed':
         // Handle ticket closed
-        if (!isStaff && supportTicket?.id === data.ticket_id) {
+        if (!canHandleSupport && supportTicket?.id === data.ticket_id) {
           setSupportTicket(null)
           setSupportMessages([])
           setShowSupportChat(false)
           alert('Support ticket has been closed by staff.')
         }
-        if (isStaff) {
+        if (canHandleSupport) {
           setSupportTickets(prev => prev.filter(t => t.id !== data.ticket_id))
           if (activeTicket?.id === data.ticket_id) {
             setActiveTicket(null)
@@ -2092,8 +2094,8 @@ function App() {
         </div>
       )}
       
-      {/* Support Chat (User) */}
-      {showSupportChat && !isStaff && (
+      {/* Support Chat (Regular users only) */}
+      {showSupportChat && !canHandleSupport && (
         <div className="support-chat-container">
           <div className="support-chat">
             <div className="support-header">
@@ -2229,8 +2231,8 @@ OR cookie string: session=abc123; token=xyz456'
               </button>
             </>
           ) : currentUser ? (
-            <div className="staff-badge">
-              {isAdmin ? 'ADMIN' : 'CASHIER'}
+            <div className={`staff-badge ${isSupport ? 'support' : ''}`}>
+              {isAdmin ? 'ADMIN' : isCashier ? 'CASHIER' : isSupport ? 'SUPPORT' : 'STAFF'}
             </div>
           ) : (
             <button className="login-btn-header" onClick={() => setShowAuthModal(true)}>
@@ -2303,8 +2305,155 @@ OR cookie string: session=abc123; token=xyz456'
         )}
       </header>
 
-      {/* CASHIER DEDICATED DASHBOARD */}
-      {isCashier ? (
+      {/* SUPPORT AGENT DEDICATED DASHBOARD */}
+      {isSupport ? (
+        <main className="support-dashboard">
+          <div className="support-dashboard-header">
+            <div className="dashboard-title">
+              <span className="title-icon">💬</span>
+              <div>
+                <h1>Support Center</h1>
+                <p>Help users with their questions and issues</p>
+              </div>
+            </div>
+            <div className="online-status">
+              <span className={`status-dot ${connected ? 'online' : 'offline'}`}></span>
+              <span>{connected ? 'Online' : 'Offline'}</span>
+            </div>
+          </div>
+          
+          <div className="support-dashboard-stats">
+            <div className="stat-card">
+              <span className="stat-number">{supportTickets.length}</span>
+              <span className="stat-label">Open Tickets</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-number">{supportTickets.filter(t => t.message_count > 0).length}</span>
+              <span className="stat-label">Active Chats</span>
+            </div>
+          </div>
+          
+          <div className="support-main-area">
+            {/* Tickets List */}
+            <div className="support-tickets-panel">
+              <div className="panel-header">
+                <h2>Open Tickets</h2>
+                <button className="refresh-btn" onClick={loadSupportTickets}>🔄</button>
+              </div>
+              
+              <div className="tickets-list-full">
+                {supportTickets.length === 0 ? (
+                  <div className="empty-tickets">
+                    <span className="empty-icon">🎉</span>
+                    <p>No open tickets!</p>
+                    <p className="empty-hint">All caught up. Great job!</p>
+                  </div>
+                ) : (
+                  supportTickets.map(ticket => (
+                    <div 
+                      key={ticket.id} 
+                      className={`ticket-card ${activeTicket?.id === ticket.id ? 'active' : ''}`}
+                      onClick={() => openTicket(ticket)}
+                    >
+                      <div className="ticket-avatar">
+                        {ticket.username?.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="ticket-details">
+                        <span className="ticket-user">{ticket.username}</span>
+                        <span className="ticket-last-msg">{ticket.last_message?.substring(0, 40)}...</span>
+                        <span className="ticket-time">
+                          {new Date(ticket.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                      <div className="ticket-badge">
+                        {ticket.message_count}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+            
+            {/* Chat Area */}
+            <div className="support-chat-panel">
+              {activeTicket ? (
+                <>
+                  <div className="chat-panel-header">
+                    <div className="chat-user-info">
+                      <div className="chat-avatar">
+                        {activeTicket.username?.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="chat-user-details">
+                        <span className="chat-user-name">{activeTicket.username}</span>
+                        <span className="chat-ticket-id">Ticket #{activeTicket.id}</span>
+                      </div>
+                    </div>
+                    <button 
+                      className="close-ticket-btn"
+                      onClick={() => closeTicket(activeTicket.id)}
+                    >
+                      ✓ Close Ticket
+                    </button>
+                  </div>
+                  
+                  <div className="chat-messages-area">
+                    {activeTicketMessages.map((msg, idx) => (
+                      <div 
+                        key={idx} 
+                        className={`chat-msg ${msg.sender_type === 'staff' ? 'outgoing' : 'incoming'}`}
+                      >
+                        {msg.sender_type !== 'staff' && (
+                          <span className="msg-sender-name">{msg.sender_name}</span>
+                        )}
+                        <div className="msg-content">
+                          {msg.message}
+                        </div>
+                        <span className="msg-timestamp">
+                          {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                    ))}
+                    {remoteTyping && (
+                      <div className="typing-indicator">
+                        <span className="typing-dot"></span>
+                        <span className="typing-dot"></span>
+                        <span className="typing-dot"></span>
+                      </div>
+                    )}
+                    <div ref={chatEndRef} />
+                  </div>
+                  
+                  <div className="chat-input-area">
+                    <input
+                      type="text"
+                      placeholder="Type your reply..."
+                      value={staffReplyInput}
+                      onChange={(e) => {
+                        setStaffReplyInput(e.target.value)
+                        handleSupportInputChange(e.target.value)
+                      }}
+                      onKeyPress={(e) => e.key === 'Enter' && sendStaffReply()}
+                    />
+                    <button 
+                      className="send-msg-btn"
+                      onClick={sendStaffReply}
+                      disabled={!staffReplyInput.trim()}
+                    >
+                      Send ➤
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="no-chat-selected">
+                  <span className="no-chat-icon">💬</span>
+                  <p>Select a ticket to start chatting</p>
+                  <p className="no-chat-hint">Click on a ticket from the list</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </main>
+      ) : isCashier ? (
         <main className="cashier-dashboard">
           {/* Cashier Header Stats */}
           <div className="cashier-stats">
@@ -3246,8 +3395,8 @@ OR cookie string: session=abc123; token=xyz456'
       </main>
       )}
 
-      {/* Floating Support Button (Users only) */}
-      {currentUser && !isStaff && !showSupportChat && (
+      {/* Floating Support Button (Regular users only - not staff or support) */}
+      {currentUser && !canHandleSupport && !showSupportChat && (
         <button className="floating-support-btn" onClick={openSupportChat}>
           💬
         </button>
@@ -3258,6 +3407,8 @@ OR cookie string: session=abc123; token=xyz456'
           <>🔒 ADMIN MODE | Shortcuts: O=Open, L=Last Call, C=Close, M=Meron, W=Wala, D=Draw, R=Reset</>
         ) : isCashier ? (
           <>💳 CASHIER MODE | Process cash-in and cash-out transactions</>
+        ) : isSupport ? (
+          <>💬 SUPPORT MODE | Help users with their questions</>
         ) : (
           <>🐓 SABONG ARENA | Good luck! 🍀</>
         )}
