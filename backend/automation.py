@@ -362,15 +362,29 @@ class PisoperyaAutomation:
         import random
         print("🛡️ Checking for security challenge...")
         
+        challenge_detected = False
+        
         for i in range(max_wait):
             try:
+                # Check if page is still valid
+                if not self.page or self.page.is_closed():
+                    print("⚠️ Page was closed during challenge wait")
+                    return False
+                
                 # Check if there's a security challenge present
                 html = await self.page.content()
                 
-                # Vercel security challenge indicators
-                if 'challenge' in html.lower() or 'security' in html.lower() or 'vercel' in html.lower():
-                    if i == 0:
+                # More specific Vercel security challenge indicators
+                is_challenge = (
+                    'vercel-challenge' in html.lower() or 
+                    'checking your browser' in html.lower() or
+                    '_vercel/insights' in html and 'challenge' in html.lower()
+                )
+                
+                if is_challenge:
+                    if not challenge_detected:
                         print("⏳ Security challenge detected, waiting for it to complete...")
+                        challenge_detected = True
                     
                     # Simulate human-like behavior while waiting
                     if i % 5 == 0:
@@ -382,10 +396,24 @@ class PisoperyaAutomation:
                 # Check if login form or main page is now visible
                 login_btn = self.page.locator('button:has-text("Login"), button:has-text("LOGIN"), a:has-text("Login"), input[type="text"], input[type="password"]')
                 if await login_btn.count() > 0:
-                    print("✅ Security challenge passed!")
+                    if challenge_detected:
+                        print("✅ Security challenge passed!")
+                    else:
+                        print("✅ No security challenge detected")
+                    return True
+                
+                # If we haven't detected a challenge and no login form, wait a bit
+                if not challenge_detected and i < 5:
+                    await asyncio.sleep(1)
+                    continue
+                    
+                # If no challenge and page seems loaded, proceed
+                if not challenge_detected:
+                    print("✅ Page loaded, no challenge detected")
                     return True
                     
             except Exception as e:
+                print(f"⚠️ Challenge check error: {e}")
                 pass
             
             await asyncio.sleep(1)
@@ -417,8 +445,8 @@ class PisoperyaAutomation:
             # Wait for the page to fully load and any security challenge to complete
             await asyncio.sleep(random.uniform(3, 5))
             
-            # Wait for security challenge if present
-            await self._wait_for_security_challenge(max_wait=20)
+            # Wait for security challenge if present (residential proxy should pass faster)
+            await self._wait_for_security_challenge(max_wait=45)
             
             # Additional wait for page to stabilize
             await asyncio.sleep(random.uniform(2, 4))
