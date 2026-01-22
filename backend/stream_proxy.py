@@ -57,6 +57,12 @@ class StreamProxy:
         self.cookies = cookies
         self.is_authenticated = len(self.cookies) > 0
     
+    def set_cookies_from_string(self, cookies: Dict[str, str]):
+        """Set cookies from a parsed cookie string dictionary"""
+        self.cookies = cookies
+        self.is_authenticated = len(self.cookies) > 0
+        print(f"📦 Loaded {len(self.cookies)} cookies from manual input")
+    
     def rewrite_manifest_urls(self, content: str, source_url: str) -> str:
         """
         Rewrite all URLs in the HLS manifest to go through our proxy.

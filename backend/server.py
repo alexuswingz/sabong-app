@@ -26,7 +26,10 @@ import httpx
 
 from automation import PisoperyaAutomation
 from stream_proxy import stream_proxy
-from config import HOST, PORT, CORS_ORIGINS, WCC_STREAM_URL, HEADLESS_MODE, IS_PRODUCTION
+from config import (
+    HOST, PORT, CORS_ORIGINS, WCC_STREAM_URL, HEADLESS_MODE, IS_PRODUCTION, 
+    PROXY_URL, WCC_USERNAME, STREAM_MODE, DIRECT_STREAM_URL, MAX_WEBSOCKET_CONNECTIONS
+)
 import database as db
 
 # Global state
@@ -49,6 +52,19 @@ state = AppState()
 async def auto_login_wcc():
     """Automatically login to WCC and set up stream proxy"""
     max_retries = 3
+    
+    # Check configuration first
+    if not WCC_USERNAME:
+        print("❌ Cannot auto-login: WCC_USERNAME not configured")
+        print("   Set WCC_USERNAME and WCC_PASSWORD in Railway environment variables")
+        return
+    
+    if IS_PRODUCTION and not PROXY_URL:
+        print("⚠️ WARNING: Running in production without PROXY_URL")
+        print("   Bot protection will likely block login attempts!")
+        print("   Add a residential proxy to bypass this:")
+        print("   - IPRoyal: ~$7/GB - https://iproyal.com")
+        print("   - Smartproxy: ~$12/GB - https://smartproxy.com")
     
     for attempt in range(max_retries):
         try:
@@ -185,6 +201,10 @@ class GCashSettings(BaseModel):
     gcash_name: str
 
 
+class ManualCookies(BaseModel):
+    cookies: str  # JSON string of cookies or cookie header string
+
+
 class CashInRequest(BaseModel):
     amount: int
 
@@ -201,10 +221,18 @@ class CashOutRequest(BaseModel):
 
 # WebSocket Manager
 class ConnectionManager:
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket) -> bool:
+        """Connect a client. Returns False if limit reached."""
+        # Check connection limit
+        if MAX_WEBSOCKET_CONNECTIONS > 0 and len(state.connected_clients) >= MAX_WEBSOCKET_CONNECTIONS:
+            print(f"⚠️ Connection limit reached ({MAX_WEBSOCKET_CONNECTIONS}). Rejecting new connection.")
+            await websocket.close(code=1013, reason="Server at capacity")
+            return False
+        
         await websocket.accept()
         state.connected_clients.append(websocket)
-        print(f"✅ Client connected. Total clients: {len(state.connected_clients)}")
+        print(f"✅ Client connected. Total clients: {len(state.connected_clients)}/{MAX_WEBSOCKET_CONNECTIONS or '∞'}")
+        return True
     
     def disconnect(self, websocket: WebSocket):
         if websocket in state.connected_clients:
@@ -246,7 +274,79 @@ async def broadcast_state():
 # REST Endpoints
 @app.get("/")
 async def root():
-    return {"message": "Sabong Declarator API", "status": "running"}
+    """API status and configuration check"""
+    config_ok = bool(WCC_USERNAME and (PROXY_URL or not IS_PRODUCTION))
+    
+    return {
+        "message": "Sabong Declarator API",
+        "status": "running",
+        "config": {
+            "production_mode": IS_PRODUCTION,
+            "headless": HEADLESS_MODE,
+            "wcc_credentials": "configured" if WCC_USERNAME else "MISSING",
+            "proxy": "configured" if PROXY_URL else ("MISSING - Required for production!" if IS_PRODUCTION else "not needed for local"),
+            "config_ok": config_ok
+        },
+        "stream": {
+            "proxy_ready": stream_proxy.is_authenticated,
+            "cookies_count": len(stream_proxy.cookies)
+        }
+    }
+
+
+@app.get("/config/status")
+async def config_status():
+    """Check if all required configuration is set"""
+    issues = []
+    
+    if not WCC_USERNAME:
+        issues.append("WCC_USERNAME not set")
+    if IS_PRODUCTION and not PROXY_URL and STREAM_MODE != 'direct':
+        issues.append("PROXY_URL not set (required for Railway deployment to bypass bot protection)")
+    if STREAM_MODE == 'direct' and not DIRECT_STREAM_URL:
+        issues.append("DIRECT_STREAM_URL not set (required for direct stream mode)")
+    
+    return {
+        "ok": len(issues) == 0,
+        "issues": issues,
+        "stream_mode": STREAM_MODE,
+        "help": {
+            "proxy_services": [
+                {"name": "IPRoyal", "price": "~$7/GB", "url": "https://iproyal.com"},
+                {"name": "Smartproxy", "price": "~$12/GB", "url": "https://smartproxy.com"},
+                {"name": "Bright Data", "price": "~$15/GB", "url": "https://brightdata.com"}
+            ],
+            "env_vars_needed": ["DATABASE_URL", "WCC_USERNAME", "WCC_PASSWORD", "PROXY_URL"],
+            "for_scale": ["STREAM_MODE=direct", "DIRECT_STREAM_URL", "MAX_WEBSOCKET_CONNECTIONS"]
+        }
+    }
+
+
+@app.get("/stats")
+async def get_stats():
+    """Get server statistics for monitoring"""
+    return {
+        "connections": {
+            "websocket_clients": len(state.connected_clients),
+            "max_allowed": MAX_WEBSOCKET_CONNECTIONS or "unlimited"
+        },
+        "betting": {
+            "current_fight": state.current_fight,
+            "status": state.betting_status,
+            "active_bets": len(state.bets),
+            "meron_total": sum(b["amount"] for b in state.bets if b["side"] == "meron"),
+            "wala_total": sum(b["amount"] for b in state.bets if b["side"] == "wala")
+        },
+        "stream": {
+            "mode": STREAM_MODE,
+            "proxy_authenticated": stream_proxy.is_authenticated,
+            "direct_url_configured": bool(DIRECT_STREAM_URL)
+        },
+        "automation": {
+            "browser_running": state.is_browser_running,
+            "logged_in": state.is_logged_in
+        }
+    }
 
 
 @app.get("/debug/screenshot")
@@ -864,13 +964,87 @@ async def proxy_segment_by_path(path: str):
 
 @app.get("/stream/status")
 async def stream_status():
-    """Check if stream proxy is ready"""
+    """Check if stream is ready - supports both direct and proxy modes"""
+    
+    # Direct mode: Users connect directly to stream (scalable)
+    if STREAM_MODE == 'direct' and DIRECT_STREAM_URL:
+        return {
+            "mode": "direct",
+            "authenticated": True,  # Direct mode doesn't need auth through us
+            "stream_url": DIRECT_STREAM_URL,
+            "scalable": True,
+            "max_users": "unlimited"
+        }
+    
+    # Proxy mode: Stream goes through our server (limited scale)
     return {
+        "mode": "proxy",
         "authenticated": stream_proxy.is_authenticated,
         "cookies_count": len(stream_proxy.cookies),
-        "proxy_url": "/stream/live.m3u8" if stream_proxy.is_authenticated else None,
-        "direct_url": WCC_STREAM_URL
+        "stream_url": "/stream/live.m3u8" if stream_proxy.is_authenticated else None,
+        "direct_url": WCC_STREAM_URL,
+        "scalable": False,
+        "max_users": "~50-100 (bandwidth limited)",
+        "warning": "Proxy mode not recommended for production. Set STREAM_MODE=direct and DIRECT_STREAM_URL for scale."
     }
+
+
+@app.post("/stream/set-cookies")
+async def set_manual_cookies(data: ManualCookies):
+    """Manually set cookies for stream proxy (admin only)
+    
+    This allows you to login from your own browser and paste cookies here.
+    
+    How to get cookies:
+    1. Login to WCC in your browser (Chrome/Firefox)
+    2. Open DevTools (F12) → Application tab → Cookies
+    3. Copy all cookies for the domain
+    4. Paste here as JSON array or as cookie header string
+    
+    Accepts formats:
+    - JSON array: [{"name": "session", "value": "abc123", "domain": ".wccgames8.xyz"}, ...]
+    - Cookie header: "session=abc123; token=xyz456; ..."
+    """
+    import json
+    
+    try:
+        cookies_str = data.cookies.strip()
+        
+        # Try to parse as JSON array first
+        if cookies_str.startswith('['):
+            cookies_list = json.loads(cookies_str)
+            stream_proxy.set_cookies_from_browser(cookies_list)
+            count = len(cookies_list)
+        else:
+            # Parse as cookie header string (name=value; name2=value2)
+            cookies_dict = {}
+            for part in cookies_str.split(';'):
+                part = part.strip()
+                if '=' in part:
+                    name, value = part.split('=', 1)
+                    cookies_dict[name.strip()] = value.strip()
+            
+            stream_proxy.set_cookies_from_string(cookies_dict)
+            count = len(cookies_dict)
+        
+        # Broadcast to clients
+        await manager.broadcast({
+            "type": "cookies_set_manually",
+            "count": count,
+            "proxy_ready": stream_proxy.is_authenticated
+        })
+        
+        return {
+            "success": True,
+            "message": f"Set {count} cookies successfully",
+            "proxy_ready": stream_proxy.is_authenticated,
+            "proxy_url": "/stream/live.m3u8"
+        }
+        
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON format")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse cookies: {str(e)}")
 
 
 @app.post("/automation/stop")
@@ -1156,7 +1330,9 @@ async def get_history():
 # WebSocket Endpoint
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+    connected = await manager.connect(websocket)
+    if not connected:
+        return  # Connection was rejected due to limit
     
     # Send current state on connect
     await websocket.send_json({

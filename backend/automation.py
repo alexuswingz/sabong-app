@@ -15,9 +15,10 @@ from config import (
     WCC_USERNAME, WCC_PASSWORD, WCC_LOGIN_URL, WCC_STREAM_URL
 )
 
-# Optional proxy support - set PROXY_URL env var to use
-# Format: http://user:pass@host:port or socks5://user:pass@host:port
-PROXY_URL = os.environ.get('PROXY_URL', None)
+# Proxy support - REQUIRED for Railway deployment to bypass bot protection
+# Format: http://user:pass@host:port
+from config import IS_PRODUCTION
+PROXY_URL = os.environ.get('PROXY_URL', '')
 
 class PisoperyaAutomation:
     def __init__(self):
@@ -26,11 +27,15 @@ class PisoperyaAutomation:
         self.password = PISOPERYA_PASSWORD
         self.arena_id = PISOPERYA_ARENA_ID
         
-        # WCC credentials
+        # WCC credentials - check if configured
         self.wcc_username = WCC_USERNAME
         self.wcc_password = WCC_PASSWORD
         self.wcc_login_url = WCC_LOGIN_URL
         self.wcc_stream_url = WCC_STREAM_URL
+        
+        # Warn if credentials not set
+        if not self.wcc_username or not self.wcc_password:
+            print("⚠️ WARNING: WCC_USERNAME and/or WCC_PASSWORD not set in environment variables!")
         
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
@@ -53,41 +58,45 @@ class PisoperyaAutomation:
         print(f"🚀 Starting browser (headless={headless})...")
         self.playwright = await async_playwright().start()
         
-        # Common args for both modes
+        # Common args for both modes - enhanced stealth
         common_args = [
             '--autoplay-policy=no-user-gesture-required',
             '--no-sandbox',
             '--disable-dev-shm-usage',
             '--disable-gpu',
             '--disable-software-rasterizer',
+            '--disable-blink-features=AutomationControlled',
         ]
         
         if headless:
-            # STEALTH HEADLESS MODE - for deployment
-            # These flags help avoid detection
+            # STEALTH HEADLESS MODE - use "new" headless for better stealth
             stealth_args = common_args + [
-                '--disable-blink-features=AutomationControlled',
                 '--disable-features=VizDisplayCompositor',
                 '--disable-background-networking',
                 '--disable-default-apps',
                 '--disable-extensions',
                 '--disable-sync',
                 '--disable-translate',
-                '--hide-scrollbars',
                 '--metrics-recording-only',
-                '--mute-audio',
                 '--no-first-run',
                 '--safebrowsing-disable-auto-update',
+                '--disable-hang-monitor',
+                '--disable-ipc-flooding-protection',
+                '--disable-popup-blocking',
+                '--disable-prompt-on-repost',
+                '--disable-renderer-backgrounding',
+                '--force-color-profile=srgb',
             ]
+            # Use channel for more realistic browser fingerprint
             self.browser = await self.playwright.chromium.launch(
                 headless=True,
-                args=stealth_args
+                args=stealth_args,
+                chromium_sandbox=False
             )
         else:
             # LOCAL MODE - off-screen window (won't be visible)
             local_args = common_args + [
-                '--disable-blink-features=AutomationControlled',
-                '--window-position=-2000,-2000',  # Move window off-screen
+                '--window-position=-2000,-2000',
                 '--window-size=800,600',
             ]
             self.browser = await self.playwright.chromium.launch(
@@ -95,45 +104,84 @@ class PisoperyaAutomation:
                 args=local_args
             )
         
-        # Build context options
+        # Randomize viewport slightly for fingerprint uniqueness
+        import random
+        viewport_width = 1280 + random.randint(-20, 20)
+        viewport_height = 720 + random.randint(-10, 10)
+        
+        # Build context options with more realistic fingerprint
         context_options = {
-            'viewport': {'width': 1280, 'height': 720},
+            'viewport': {'width': viewport_width, 'height': viewport_height},
             'permissions': ['geolocation'],
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'locale': 'en-US',
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'locale': 'en-PH',
             'timezone_id': 'Asia/Manila',
             'color_scheme': 'light',
             'device_scale_factor': 1,
+            'has_touch': False,
+            'is_mobile': False,
+            'java_script_enabled': True,
+            'accept_downloads': False,
+            'extra_http_headers': {
+                'Accept-Language': 'en-PH,en-US;q=0.9,en;q=0.8',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Cache-Control': 'max-age=0',
+                'Sec-Ch-Ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+                'Sec-Ch-Ua-Mobile': '?0',
+                'Sec-Ch-Ua-Platform': '"Windows"',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Upgrade-Insecure-Requests': '1',
+            }
         }
         
-        # Add proxy if configured
+        # Add proxy if configured - REQUIRED for production to bypass bot protection
         if PROXY_URL:
-            print(f"🌐 Using proxy: {PROXY_URL.split('@')[-1] if '@' in PROXY_URL else PROXY_URL}")
+            # Hide credentials in log
+            proxy_display = PROXY_URL.split('@')[-1] if '@' in PROXY_URL else PROXY_URL
+            print(f"🌐 Using residential proxy: {proxy_display}")
             context_options['proxy'] = {'server': PROXY_URL}
+        elif IS_PRODUCTION:
+            print("⚠️ WARNING: No PROXY_URL configured! Bot protection will likely block login.")
+            print("   Add a residential proxy to Railway environment variables.")
+            print("   Recommended: IPRoyal (~$7/GB) or Smartproxy (~$12/GB)")
         
         # Create context with viewport and permissions
         self.context = await self.browser.new_context(**context_options)
         
         self.page = await self.context.new_page()
         
-        # STEALTH: Inject scripts to avoid bot detection
+        # STEALTH: Inject comprehensive anti-detection scripts
         await self.page.add_init_script("""
             // Override webdriver property
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
             
-            // Override plugins
+            // Make plugins look real
             Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5]
+                get: () => {
+                    const plugins = [
+                        {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer'},
+                        {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai'},
+                        {name: 'Native Client', filename: 'internal-nacl-plugin'}
+                    ];
+                    plugins.item = (i) => plugins[i];
+                    plugins.namedItem = (name) => plugins.find(p => p.name === name);
+                    plugins.refresh = () => {};
+                    return plugins;
+                }
             });
             
             // Override languages
             Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-US', 'en']
+                get: () => ['en-PH', 'en-US', 'en']
             });
             
-            // Override permissions
+            // Make permissions API look normal
             const originalQuery = window.navigator.permissions.query;
             window.navigator.permissions.query = (parameters) => (
                 parameters.name === 'notifications' ?
@@ -141,15 +189,56 @@ class PisoperyaAutomation:
                     originalQuery(parameters)
             );
             
-            // Override chrome runtime
+            // Override chrome runtime to look real
             window.chrome = {
-                runtime: {}
+                runtime: {
+                    PlatformOs: { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros', LINUX: 'linux', OPENBSD: 'openbsd' },
+                    PlatformArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64' },
+                    PlatformNaclArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64' },
+                    RequestUpdateCheckStatus: { THROTTLED: 'throttled', NO_UPDATE: 'no_update', UPDATE_AVAILABLE: 'update_available' },
+                    OnInstalledReason: { INSTALL: 'install', UPDATE: 'update', CHROME_UPDATE: 'chrome_update', SHARED_MODULE_UPDATE: 'shared_module_update' },
+                    OnRestartRequiredReason: { APP_UPDATE: 'app_update', OS_UPDATE: 'os_update', PERIODIC: 'periodic' }
+                },
+                loadTimes: function() {},
+                csi: function() {},
+                app: {}
             };
             
             // Remove automation indicators
             delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
             delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
             delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+            
+            // Override toString to hide modifications
+            const originalToString = Function.prototype.toString;
+            Function.prototype.toString = function() {
+                if (this === navigator.permissions.query) {
+                    return 'function query() { [native code] }';
+                }
+                return originalToString.call(this);
+            };
+            
+            // Add realistic screen properties
+            Object.defineProperty(screen, 'availWidth', { get: () => window.innerWidth });
+            Object.defineProperty(screen, 'availHeight', { get: () => window.innerHeight });
+            
+            // Spoof WebGL vendor and renderer
+            const getParameter = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                if (parameter === 37445) return 'Intel Inc.';
+                if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+                return getParameter.call(this, parameter);
+            };
+            
+            // Override connection type
+            Object.defineProperty(navigator, 'connection', {
+                get: () => ({
+                    effectiveType: '4g',
+                    rtt: 50,
+                    downlink: 10,
+                    saveData: false
+                })
+            });
         """)
         
         # Set up network request interception to capture stream URLs
@@ -257,9 +346,50 @@ class PisoperyaAutomation:
             await self.page.mouse.move(x, y)
             await asyncio.sleep(random.uniform(0.1, 0.3))
 
+    async def _wait_for_security_challenge(self, max_wait: int = 30) -> bool:
+        """Wait for Vercel/Cloudflare security challenge to complete"""
+        import random
+        print("🛡️ Checking for security challenge...")
+        
+        for i in range(max_wait):
+            try:
+                # Check if there's a security challenge present
+                html = await self.page.content()
+                
+                # Vercel security challenge indicators
+                if 'challenge' in html.lower() or 'security' in html.lower() or 'vercel' in html.lower():
+                    if i == 0:
+                        print("⏳ Security challenge detected, waiting for it to complete...")
+                    
+                    # Simulate human-like behavior while waiting
+                    if i % 5 == 0:
+                        await self._random_mouse_move()
+                    
+                    await asyncio.sleep(1)
+                    continue
+                
+                # Check if login form or main page is now visible
+                login_btn = self.page.locator('button:has-text("Login"), button:has-text("LOGIN"), a:has-text("Login"), input[type="text"], input[type="password"]')
+                if await login_btn.count() > 0:
+                    print("✅ Security challenge passed!")
+                    return True
+                    
+            except Exception as e:
+                pass
+            
+            await asyncio.sleep(1)
+        
+        print("⚠️ Security challenge timeout, proceeding anyway...")
+        return True
+
     async def login_wcc(self) -> bool:
         """Login to WCC Games (Official Site) with human-like behavior"""
         import random
+        
+        # Check if credentials are configured
+        if not self.wcc_username or not self.wcc_password:
+            print("❌ WCC credentials not configured! Set WCC_USERNAME and WCC_PASSWORD environment variables.")
+            return False
         
         if not self.page:
             await self.start_browser()
@@ -268,50 +398,101 @@ class PisoperyaAutomation:
             print("🔐 Navigating to WCC login page...")
             
             # Random delay before navigation (human-like)
-            await asyncio.sleep(random.uniform(1, 2))
+            await asyncio.sleep(random.uniform(0.5, 1.5))
             
-            await self.page.goto(self.wcc_login_url, wait_until="networkidle", timeout=60000)
+            # Navigate with longer timeout
+            await self.page.goto(self.wcc_login_url, wait_until="domcontentloaded", timeout=60000)
             
-            # Random delay and mouse movement (human-like)
+            # Wait for the page to fully load and any security challenge to complete
+            await asyncio.sleep(random.uniform(3, 5))
+            
+            # Wait for security challenge if present
+            await self._wait_for_security_challenge(max_wait=20)
+            
+            # Additional wait for page to stabilize
             await asyncio.sleep(random.uniform(2, 4))
             await self._random_mouse_move()
             
             # Step 1: Click the first login button to open the form
             print("🖱️ Opening login form...")
-            try:
-                # Try multiple selectors with longer timeout
-                first_login_btn = self.page.locator('button:has-text("Login"), button:has-text("LOGIN"), a:has-text("Login")').first
-                await first_login_btn.wait_for(state="visible", timeout=15000)
-                await asyncio.sleep(random.uniform(0.5, 1.5))
-                await first_login_btn.click()
-            except:
-                # Fallback: try any button in the section
-                try:
-                    first_login_btn = self.page.locator('section button, header button').first
-                    await first_login_btn.click()
-                except:
-                    print("⚠️ Could not find login button, trying direct form access...")
+            login_btn_found = False
             
-            await asyncio.sleep(random.uniform(1.5, 3))
+            # Try multiple selectors for the login button
+            login_selectors = [
+                'button:has-text("Login")',
+                'button:has-text("LOGIN")', 
+                'a:has-text("Login")',
+                'a:has-text("LOGIN")',
+                '[class*="login"]',
+                'button:has-text("Sign In")',
+                'header button',
+                'nav button',
+            ]
+            
+            for selector in login_selectors:
+                try:
+                    btn = self.page.locator(selector).first
+                    if await btn.is_visible(timeout=3000):
+                        await asyncio.sleep(random.uniform(0.3, 1))
+                        await btn.click()
+                        login_btn_found = True
+                        print(f"✅ Clicked login button using: {selector}")
+                        break
+                except:
+                    continue
+            
+            if not login_btn_found:
+                print("⚠️ Could not find login button, page may already show login form...")
+            
+            await asyncio.sleep(random.uniform(2, 4))
             await self._random_mouse_move()
             
-            # Step 2: Fill username - wait for input to be ready
+            # Step 2: Fill username - wait for input with multiple selector attempts
             print("👤 Entering username...")
-            username_input = self.page.locator('input[autocomplete="username"], input[placeholder*="username" i], input[name="username"], input[type="text"]').first
-            await username_input.wait_for(state="visible", timeout=15000)
+            username_selectors = [
+                'input[autocomplete="username"]',
+                'input[placeholder*="username" i]',
+                'input[placeholder*="Username" i]',
+                'input[name="username"]',
+                'input[name="userName"]',
+                'input[type="text"]:visible',
+                'form input[type="text"]',
+            ]
+            
+            username_input = None
+            for selector in username_selectors:
+                try:
+                    input_el = self.page.locator(selector).first
+                    if await input_el.is_visible(timeout=5000):
+                        username_input = input_el
+                        print(f"✅ Found username input using: {selector}")
+                        break
+                except:
+                    continue
+            
+            if not username_input:
+                # Last resort - find any visible text input
+                username_input = self.page.locator('input:visible').first
+                await username_input.wait_for(state="visible", timeout=20000)
+            
             await asyncio.sleep(random.uniform(0.3, 0.8))
             
-            # Human-like typing
+            # Human-like typing with clear first
+            await username_input.click()
+            await asyncio.sleep(random.uniform(0.1, 0.3))
+            await username_input.fill('')  # Clear any existing text
             await self._human_type(username_input, self.wcc_username)
             await asyncio.sleep(random.uniform(0.5, 1))
             
             # Step 3: Fill password
             print("🔑 Entering password...")
-            password_input = self.page.locator('input[type="password"]').first
-            await password_input.wait_for(state="visible", timeout=10000)
+            password_input = self.page.locator('input[type="password"]:visible').first
+            await password_input.wait_for(state="visible", timeout=15000)
             await asyncio.sleep(random.uniform(0.3, 0.8))
             
             # Human-like typing
+            await password_input.click()
+            await asyncio.sleep(random.uniform(0.1, 0.3))
             await self._human_type(password_input, self.wcc_password)
             await asyncio.sleep(random.uniform(0.5, 1.5))
             
@@ -320,33 +501,81 @@ class PisoperyaAutomation:
             
             # Step 4: Click LOGIN submit button
             print("🖱️ Clicking LOGIN button...")
-            login_submit = self.page.locator('button[type="submit"], button:has-text("LOGIN"), button:has-text("Log In"), button:has-text("Sign In")').first
-            await login_submit.wait_for(state="visible", timeout=10000)
-            await asyncio.sleep(random.uniform(0.3, 0.8))
-            await login_submit.click()
+            submit_selectors = [
+                'button[type="submit"]',
+                'button:has-text("LOGIN")',
+                'button:has-text("Login")',
+                'button:has-text("Log In")',
+                'button:has-text("Sign In")',
+                'form button',
+                'input[type="submit"]',
+            ]
+            
+            for selector in submit_selectors:
+                try:
+                    btn = self.page.locator(selector).first
+                    if await btn.is_visible(timeout=3000):
+                        await asyncio.sleep(random.uniform(0.3, 0.8))
+                        await btn.click()
+                        print(f"✅ Clicked submit using: {selector}")
+                        break
+                except:
+                    continue
             
             print("⏳ Waiting for login to complete...")
-            await asyncio.sleep(random.uniform(5, 8))  # Give more time for login to process
+            await asyncio.sleep(random.uniform(6, 10))  # Give more time for login to process
             
             # Check if we're logged in by looking for dashboard elements
             try:
                 # Look for elements that indicate successful login
-                dashboard = self.page.locator('text=Dashboard, text=Balance, text=ARENA, text=Logout, text=Profile')
-                await dashboard.first.wait_for(state="visible", timeout=10000)
-                print("✅ Dashboard detected - login successful!")
+                dashboard_selectors = [
+                    'text=Dashboard',
+                    'text=Balance',
+                    'text=ARENA',
+                    'text=ENTER ARENA',
+                    'text=Logout',
+                    'text=Profile',
+                    '[class*="balance"]',
+                    '[class*="arena"]',
+                ]
+                
+                for selector in dashboard_selectors:
+                    try:
+                        el = self.page.locator(selector).first
+                        if await el.is_visible(timeout=3000):
+                            print(f"✅ Dashboard detected ({selector}) - login successful!")
+                            break
+                    except:
+                        continue
             except:
-                print("⚠️ Dashboard not detected, checking URL...")
+                print("⚠️ Dashboard not clearly detected, checking URL...")
             
             # Step 5: Close any popup that appears
             print("🔄 Checking for popups...")
             await asyncio.sleep(random.uniform(1, 2))
             try:
-                close_btn = self.page.locator('i.mdi-close, button:has(i.mdi-close), .v-dialog button, button[aria-label="Close"], .close-btn').first
-                if await close_btn.is_visible(timeout=3000):
-                    await asyncio.sleep(random.uniform(0.3, 0.8))
-                    await close_btn.click()
-                    print("✅ Popup closed")
-                    await asyncio.sleep(1)
+                popup_close_selectors = [
+                    'i.mdi-close',
+                    'button:has(i.mdi-close)',
+                    '.v-dialog button',
+                    'button[aria-label="Close"]',
+                    '.close-btn',
+                    '[class*="close"]',
+                    'button:has-text("×")',
+                    'button:has-text("X")',
+                ]
+                
+                for selector in popup_close_selectors:
+                    try:
+                        close_btn = self.page.locator(selector).first
+                        if await close_btn.is_visible(timeout=2000):
+                            await asyncio.sleep(random.uniform(0.3, 0.8))
+                            await close_btn.click()
+                            print("✅ Popup closed")
+                            await asyncio.sleep(1)
+                            break
+                    except:
+                        continue
             except:
                 print("ℹ️ No popup found (or already closed)")
             

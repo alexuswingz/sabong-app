@@ -30,6 +30,11 @@ function App() {
   const [editGcashNumber, setEditGcashNumber] = useState('')
   const [editGcashName, setEditGcashName] = useState('')
   
+  // Admin Stream Cookie Settings
+  const [showCookieModal, setShowCookieModal] = useState(false)
+  const [cookieInput, setCookieInput] = useState('')
+  const [cookieLoading, setCookieLoading] = useState(false)
+  
   // Cash Out State
   const [showCashOutModal, setShowCashOutModal] = useState(false)
   const [cashOutAmount, setCashOutAmount] = useState('')
@@ -403,6 +408,38 @@ function App() {
     setCashInRequest(null)
   }
 
+  // Admin: Set Stream Cookies Manually
+  const submitStreamCookies = async () => {
+    if (!cookieInput.trim()) {
+      alert('Please paste cookies')
+      return
+    }
+    
+    setCookieLoading(true)
+    try {
+      const response = await fetch(`${API_URL}/stream/set-cookies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cookies: cookieInput })
+      })
+      const data = await response.json()
+      
+      if (response.ok && data.success) {
+        alert(`✅ ${data.message}\nStream proxy is ready!`)
+        setProxyReady(true)
+        setStreamUrl(PROXY_STREAM_URL)
+        setShowStream(true)
+        setShowCookieModal(false)
+        setCookieInput('')
+      } else {
+        alert(data.detail || 'Failed to set cookies')
+      }
+    } catch (error) {
+      alert('Connection error')
+    }
+    setCookieLoading(false)
+  }
+
   // Admin: Update GCash Settings
   const updateGcashSettings = async () => {
     try {
@@ -631,32 +668,45 @@ function App() {
     }
   }, [soundEnabled])
 
-  // Auto-check proxy status and show stream on load
+  // Auto-check stream status and show stream on load
   useEffect(() => {
-    const checkProxyAndAutoShow = async () => {
+    const checkStreamAndAutoShow = async () => {
       try {
         const response = await fetch(`${API_URL}/stream/status`)
         const data = await response.json()
         
-        if (data.authenticated) {
-          console.log('✅ Proxy is ready! Auto-showing stream...')
+        // Direct mode - use direct stream URL (scalable)
+        if (data.mode === 'direct' && data.stream_url) {
+          console.log('✅ Direct stream mode - scalable!')
           setProxyReady(true)
           setIsLoggedIn(true)
           setIsBrowserRunning(true)
-          setStreamUrl(PROXY_STREAM_URL)
+          setStreamUrl(data.stream_url)
+          setShowStream(true)
+          setStreamStatus('loading')
+          return
+        }
+        
+        // Proxy mode - use proxy URL
+        if (data.authenticated && data.stream_url) {
+          console.log('✅ Proxy stream ready!')
+          setProxyReady(true)
+          setIsLoggedIn(true)
+          setIsBrowserRunning(true)
+          setStreamUrl(`${API_URL}${data.stream_url}`)
           setShowStream(true)
           setStreamStatus('loading')
         } else {
-          console.log('⏳ Waiting for auto-login to complete...')
-          setTimeout(checkProxyAndAutoShow, 3000)
+          console.log('⏳ Waiting for stream to be ready...')
+          setTimeout(checkStreamAndAutoShow, 3000)
         }
       } catch (error) {
         console.log('⏳ Backend not ready yet, retrying...')
-        setTimeout(checkProxyAndAutoShow, 2000)
+        setTimeout(checkStreamAndAutoShow, 2000)
       }
     }
     
-    setTimeout(checkProxyAndAutoShow, 2000)
+    setTimeout(checkStreamAndAutoShow, 2000)
   }, [])
 
   // WebSocket connection
@@ -1533,6 +1583,47 @@ function App() {
         </div>
       )}
       
+      {/* Stream Cookie Modal (Admin) */}
+      {showCookieModal && (
+        <div className="modal-overlay" onClick={() => setShowCookieModal(false)}>
+          <div className="modal-content cookie-modal" onClick={e => e.stopPropagation()}>
+            <button className="modal-close-btn" onClick={() => setShowCookieModal(false)}>×</button>
+            <h2>🍪 Set Stream Cookies</h2>
+            
+            <div className="cookie-instructions">
+              <p><strong>How to get cookies:</strong></p>
+              <ol>
+                <li>Open <a href="https://www.wccgames8.xyz" target="_blank" rel="noreferrer">WCC Games</a> in your browser</li>
+                <li>Login to your account</li>
+                <li>Press <kbd>F12</kbd> to open DevTools</li>
+                <li>Go to <strong>Application</strong> → <strong>Cookies</strong></li>
+                <li>Right-click → Copy all as JSON, OR</li>
+                <li>Go to <strong>Network</strong> tab, click any request, copy the <code>Cookie</code> header value</li>
+              </ol>
+            </div>
+            
+            <div className="cookie-input-section">
+              <label>Paste cookies here:</label>
+              <textarea
+                placeholder='Paste JSON array: [{"name": "session", "value": "..."}, ...] 
+OR cookie string: session=abc123; token=xyz456'
+                value={cookieInput}
+                onChange={(e) => setCookieInput(e.target.value)}
+                rows={6}
+              />
+            </div>
+            
+            <button 
+              className="btn-proceed"
+              onClick={submitStreamCookies}
+              disabled={cookieLoading || !cookieInput.trim()}
+            >
+              {cookieLoading ? '⏳ Setting...' : '🚀 Set Cookies & Start Stream'}
+            </button>
+          </div>
+        </div>
+      )}
+      
       {/* Header */}
       <header className="header">
         <div className="logo">🐓 SABONG {isAdmin ? 'ADMIN' : isCashier ? 'CASHIER' : 'ARENA'}</div>
@@ -1585,7 +1676,7 @@ function App() {
               <div className="panel-title">
                 📺 LIVE STREAM
                 {proxyReady && <span className="proxy-badge">✅ READY</span>}
-      </div>
+              </div>
               
               {proxyReady ? (
                 <p className="stream-ready-msg">
@@ -1599,12 +1690,20 @@ function App() {
                     }}
                   >
                     📺 Watch Stream
-        </button>
+                  </button>
                 </p>
               ) : (
                 <div className="auto-login-status">
                   <div className="loading-spinner"></div>
-                  <p>⏳ Loading stream...</p>
+                  <p>⏳ Waiting for stream...</p>
+                  {isAdmin && (
+                    <button 
+                      className="cookie-btn"
+                      onClick={() => setShowCookieModal(true)}
+                    >
+                      🍪 Set Cookies Manually
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -1834,6 +1933,14 @@ function App() {
                 onClick={() => setShowGcashSettingsModal(true)}
               >
                 ⚙️ GCash Settings
+              </button>
+              
+              {/* Stream Cookie Button */}
+              <button 
+                className="gcash-settings-btn"
+                onClick={() => setShowCookieModal(true)}
+              >
+                🍪 Stream Cookies
               </button>
             </div>
           )}

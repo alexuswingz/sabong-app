@@ -3,13 +3,14 @@ Database module for user authentication
 PostgreSQL with asyncpg
 """
 
+import os
 import asyncpg
 import bcrypt
 from typing import Optional, Dict
 from datetime import datetime
 
-# Database connection URL
-DATABASE_URL = "postgresql://postgres:ABYlnsihdIQGEKxNiREaHjOoikPwxlpM@crossover.proxy.rlwy.net:32839/railway"
+# Database connection URL - MUST be set as environment variable in production!
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
 # Global connection pool
 pool: Optional[asyncpg.Pool] = None
@@ -18,6 +19,10 @@ pool: Optional[asyncpg.Pool] = None
 async def init_db():
     """Initialize database connection and create tables"""
     global pool
+    
+    if not DATABASE_URL:
+        print("❌ DATABASE_URL environment variable not set!")
+        raise ValueError("DATABASE_URL must be set in environment variables")
     
     try:
         pool = await asyncpg.create_pool(
