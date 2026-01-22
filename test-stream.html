@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream Test - Direct Access</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #0a0a0b;
+            color: #f5f5f5;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        h1 {
+            margin-bottom: 10px;
+            color: #fbbf24;
+        }
+        .status {
+            padding: 10px 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            font-weight: bold;
+        }
+        .status.loading { background: #78350f; color: #fbbf24; }
+        .status.success { background: #14532d; color: #22c55e; }
+        .status.error { background: #7f1d1d; color: #ef4444; }
+        .video-container {
+            width: 100%;
+            max-width: 900px;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        }
+        video {
+            width: 100%;
+            aspect-ratio: 16/9;
+        }
+        .url-display {
+            margin-top: 20px;
+            padding: 15px;
+            background: #1a1a1a;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #9ca3af;
+            word-break: break-all;
+            max-width: 900px;
+        }
+        .result-box {
+            margin-top: 20px;
+            padding: 20px;
+            border-radius: 12px;
+            max-width: 900px;
+            width: 100%;
+            text-align: center;
+        }
+        .result-box.success {
+            background: linear-gradient(135deg, #064e3b 0%, #022c22 100%);
+            border: 2px solid #10b981;
+        }
+        .result-box.error {
+            background: linear-gradient(135deg, #7f1d1d 0%, #450a0a 100%);
+            border: 2px solid #ef4444;
+        }
+        .result-box h2 { margin-bottom: 10px; }
+        .result-box p { color: #9ca3af; }
+        button {
+            margin-top: 15px;
+            padding: 12px 30px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        button:hover { background: #2563eb; }
+    </style>
+</head>
+<body>
+    <h1>🐓 Stream Direct Access Test</h1>
+    <p>Testing if the stream works without login...</p>
+    
+    <div id="status" class="status loading">⏳ Loading stream...</div>
+    
+    <div class="video-container">
+        <video id="video" controls autoplay muted playsinline></video>
+    </div>
+    
+    <div class="url-display">
+        <strong>Stream URL:</strong><br>
+        https://stream.wccgames7.xyz/wccstream/streams/live.m3u8
+    </div>
+    
+    <div id="result" class="result-box" style="display: none;"></div>
+
+    <script>
+        const streamUrl = 'https://stream.wccgames7.xyz/wccstream/streams/live.m3u8';
+        const video = document.getElementById('video');
+        const status = document.getElementById('status');
+        const result = document.getElementById('result');
+        
+        function showSuccess() {
+            status.className = 'status success';
+            status.textContent = '✅ Stream loaded successfully!';
+            result.style.display = 'block';
+            result.className = 'result-box success';
+            result.innerHTML = `
+                <h2>🎉 NO LOGIN REQUIRED!</h2>
+                <p>The stream works directly without authentication!</p>
+                <p>You can use this URL in any HLS player.</p>
+            `;
+        }
+        
+        function showError(msg) {
+            status.className = 'status error';
+            status.textContent = '❌ ' + msg;
+            result.style.display = 'block';
+            result.className = 'result-box error';
+            result.innerHTML = `
+                <h2>🔒 Login Required</h2>
+                <p>The stream requires authentication.</p>
+                <p>Use the automation in the main app to login first.</p>
+                <button onclick="location.reload()">Try Again</button>
+            `;
+        }
+        
+        if (Hls.isSupported()) {
+            const hls = new Hls({
+                enableWorker: true,
+                lowLatencyMode: true,
+                xhrSetup: (xhr) => {
+                    xhr.withCredentials = false;
+                }
+            });
+            
+            hls.loadSource(streamUrl);
+            hls.attachMedia(video);
+            
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                console.log('✅ Manifest loaded - Stream is PUBLIC!');
+                showSuccess();
+                video.play().catch(e => console.log('Autoplay blocked:', e));
+            });
+            
+            hls.on(Hls.Events.ERROR, (event, data) => {
+                console.error('HLS Error:', data);
+                if (data.fatal) {
+                    if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                        if (data.response?.code === 403) {
+                            showError('403 Forbidden - Authentication required');
+                        } else if (data.response?.code === 404) {
+                            showError('404 Not Found - Stream may be offline');
+                        } else {
+                            showError('Network error - ' + (data.details || 'Check console'));
+                        }
+                    } else {
+                        showError('Playback error - ' + data.details);
+                    }
+                }
+            });
+            
+            // Timeout - if nothing happens in 10 seconds
+            setTimeout(() => {
+                if (status.textContent.includes('Loading')) {
+                    showError('Timeout - Stream not responding');
+                }
+            }, 10000);
+            
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            // Safari native HLS
+            video.src = streamUrl;
+            video.addEventListener('loadedmetadata', showSuccess);
+            video.addEventListener('error', () => showError('Native HLS error'));
+        } else {
+            showError('HLS not supported in this browser');
+        }
+    </script>
+</body>
+</html>
