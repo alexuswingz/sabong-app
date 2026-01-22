@@ -153,14 +153,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS - Allow frontend origins + Railway domains in production
+# CORS - Allow all origins for streaming to work
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
-    allow_origin_regex=r"https://.*\.up\.railway\.app" if IS_PRODUCTION else None,
-    allow_credentials=True,
+    allow_origins=["*"],  # Allow all origins - needed for stream proxy
+    allow_credentials=False,  # Must be False when using "*"
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 
