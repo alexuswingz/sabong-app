@@ -548,12 +548,20 @@ async def approve_cashin(data: CashInAction, admin_id: int = 1):
     if not result:
         raise HTTPException(status_code=404, detail="Request not found or already processed")
     
-    # Broadcast update
+    # Broadcast cashin_approved message
     await manager.broadcast({
         "type": "cashin_approved",
         "user_id": result['user_id'],
         "amount": result['amount'],
         "new_credits": result['new_credits']
+    })
+    
+    # Also send a dedicated credit_update for reliability
+    await manager.broadcast({
+        "type": "credit_update",
+        "user_id": result['user_id'],
+        "credits": result['new_credits'],
+        "reason": "cashin"
     })
     
     return {"success": True, "result": result}
@@ -653,6 +661,14 @@ async def reject_cashout(data: CashInAction, staff_id: int = 1):
         "user_id": result['user_id'],
         "amount": result['amount'],
         "new_credits": result['new_credits']
+    })
+    
+    # Also send dedicated credit_update for reliability
+    await manager.broadcast({
+        "type": "credit_update",
+        "user_id": result['user_id'],
+        "credits": result['new_credits'],
+        "reason": "cashout_refund"
     })
     
     return {"success": True, "result": result}
@@ -1474,6 +1490,16 @@ async def declare_winner(declaration: WinnerDeclaration):
         "payouts": payouts,  # Send payout info so clients can update
         "rake_percentage": RAKE_PERCENTAGE
     })
+    
+    # Send dedicated credit_update for each user who won/got refunded (more reliable)
+    for payout in payouts:
+        if payout.get('new_credits') is not None:
+            await manager.broadcast({
+                "type": "credit_update",
+                "user_id": payout['user_id'],
+                "credits": payout['new_credits'],
+                "reason": "win" if payout.get('payout') else "refund"
+            })
     
     state.betting_status = "result"
     await broadcast_state()

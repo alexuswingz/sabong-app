@@ -3288,3 +3288,196 @@ body {
     font-size: 0.75rem;
   }
 }
+
+/* ============ CASH-OUT QR CODE SECTION ============ */
+.cashout-request-item {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.cashout-request-item > .request-info {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.cashout-request-item > .request-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  justify-content: flex-end;
+}
+
+.cashout-request-item.expanded {
+  border-color: var(--gold);
+}
+
+.qr-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+  cursor: pointer;
+  font-size: 1.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.qr-btn:hover {
+  background: rgba(59, 130, 246, 0.25);
+  transform: scale(1.05);
+}
+
+.cashout-qr-section {
+  width: 100%;
+  margin-top: 12px;
+  padding: 16px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.02) 100%);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+}
+
+.qr-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  font-weight: 600;
+  color: var(--gold);
+}
+
+.qr-close {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: rgba(255,255,255,0.1);
+  color: var(--text-secondary);
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  transition: all 0.2s;
+}
+
+.qr-close:hover {
+  background: rgba(255,255,255,0.2);
+  color: var(--text-primary);
+}
+
+.qr-container.small {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  background: white;
+  border-radius: var(--radius-md);
+  margin-bottom: 12px;
+}
+
+.qr-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.qr-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-glass);
+  border-radius: var(--radius-sm);
+}
+
+.qr-detail-row .label {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.qr-detail-row .value {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.qr-detail-row.highlight {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.qr-detail-row.highlight .value {
+  color: var(--gold);
+  font-size: 1.1rem;
+}
+
+/* ============ STREAM BUFFERING & REFRESH ============ */
+.stream-loading-overlay.buffering {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.refresh-stream-btn {
+  margin-top: 12px;
+  padding: 10px 20px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-md);
+  color: white;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+
+.refresh-stream-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.refresh-stream-btn:active {
+  transform: scale(0.95);
+}
+
+.stream-refresh-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.stream-refresh-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  transform: rotate(180deg);
+}
+
+.stream-refresh-btn:active {
+  transform: rotate(180deg) scale(0.9);
+}
+
+/* Mobile adjustments for cash-out QR */
+@media (max-width: 480px) {
+  .cashout-request-item > .request-info {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .cashout-qr-section {
+    padding: 12px;
+  }
+  
+  .qr-container.small svg {
+    width: 120px !important;
+    height: 120px !important;
+  }
+}

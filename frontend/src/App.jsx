@@ -400,6 +400,24 @@ function App() {
     setAudioMuted(prev => !prev)
   }
 
+  // Refresh stream without reloading page
+  const refreshStream = () => {
+    console.log('🔄 Refreshing stream...')
+    setStreamStatus('loading')
+    
+    // Destroy and recreate HLS
+    if (hlsRef.current) {
+      hlsRef.current.destroy()
+      hlsRef.current = null
+    }
+    
+    // Toggle stream off and on to trigger useEffect
+    setShowStream(false)
+    setTimeout(() => {
+      setShowStream(true)
+    }, 300)
+  }
+
   // Load GCash settings
   useEffect(() => {
     const loadGcashSettings = async () => {
@@ -541,7 +559,12 @@ function App() {
   }
 
   // Admin: Approve/Reject Cash In
+  const [processingCashIn, setProcessingCashIn] = useState(null)
+  
   const approveCashIn = async (requestId) => {
+    if (processingCashIn) return // Prevent double-clicks
+    setProcessingCashIn(requestId)
+    
     try {
       const response = await fetch(`${API_URL}/cashin/approve?admin_id=${currentUser.id}`, {
         method: 'POST',
@@ -550,17 +573,29 @@ function App() {
       })
       const data = await response.json()
       
-      if (data.success) {
+      if (response.ok && data.success) {
+        // Remove from list immediately
         setPendingCashIns(prev => prev.filter(r => r.id !== requestId))
-        alert(`✅ Approved! User credited ₱${data.result.amount}`)
+        // Use setTimeout to allow React to re-render before showing alert
+        const amount = data.result?.amount || 0
+        setTimeout(() => {
+          alert(`✅ Approved! User credited ₱${amount.toLocaleString()}`)
+        }, 100)
+      } else {
+        alert(data.detail || 'Failed to approve')
       }
     } catch (error) {
-      alert('Failed to approve')
+      console.error('Approve error:', error)
+      alert('Failed to approve - connection error')
+    } finally {
+      setProcessingCashIn(null)
     }
   }
 
   const rejectCashIn = async (requestId) => {
     if (!confirm('Reject this cash-in request?')) return
+    if (processingCashIn) return
+    setProcessingCashIn(requestId)
     
     try {
       const response = await fetch(`${API_URL}/cashin/reject?admin_id=${currentUser.id}`, {
@@ -570,11 +605,16 @@ function App() {
       })
       const data = await response.json()
       
-      if (data.success) {
+      if (response.ok && data.success) {
         setPendingCashIns(prev => prev.filter(r => r.id !== requestId))
+      } else {
+        alert(data.detail || 'Failed to reject')
       }
     } catch (error) {
-      alert('Failed to reject')
+      console.error('Reject error:', error)
+      alert('Failed to reject - connection error')
+    } finally {
+      setProcessingCashIn(null)
     }
   }
 
@@ -644,9 +684,14 @@ function App() {
   }
 
   // Staff: Approve/Reject Cash Out
+  const [processingCashOut, setProcessingCashOut] = useState(null)
+  const [showCashOutQR, setShowCashOutQR] = useState(null) // Track which cash-out QR to show
+  
   const approveCashOut = async (requestId) => {
     const request = pendingCashOuts.find(r => r.id === requestId)
     if (!confirm(`Approve cash-out?\n\nSend ₱${request?.amount} to:\nGCash: ${request?.gcash_number}\nName: ${request?.gcash_name}`)) return
+    if (processingCashOut) return
+    setProcessingCashOut(requestId)
     
     try {
       const response = await fetch(`${API_URL}/cashout/approve?staff_id=${currentUser.id}`, {
@@ -656,17 +701,28 @@ function App() {
       })
       const data = await response.json()
       
-      if (data.success) {
+      if (response.ok && data.success) {
         setPendingCashOuts(prev => prev.filter(r => r.id !== requestId))
-        alert(`✅ Approved! Send ₱${data.result.amount} to ${data.result.gcash_number}`)
+        const amount = data.result?.amount || 0
+        const gcashNum = data.result?.gcash_number || ''
+        setTimeout(() => {
+          alert(`✅ Approved! Send ₱${amount.toLocaleString()} to ${gcashNum}`)
+        }, 100)
+      } else {
+        alert(data.detail || 'Failed to approve')
       }
     } catch (error) {
-      alert('Failed to approve')
+      console.error('Approve cashout error:', error)
+      alert('Failed to approve - connection error')
+    } finally {
+      setProcessingCashOut(null)
     }
   }
 
   const rejectCashOut = async (requestId) => {
     if (!confirm('Reject this cash-out request? Credits will be refunded to user.')) return
+    if (processingCashOut) return
+    setProcessingCashOut(requestId)
     
     try {
       const response = await fetch(`${API_URL}/cashout/reject?staff_id=${currentUser.id}`, {
@@ -676,12 +732,19 @@ function App() {
       })
       const data = await response.json()
       
-      if (data.success) {
+      if (response.ok && data.success) {
         setPendingCashOuts(prev => prev.filter(r => r.id !== requestId))
-        alert('Cash-out rejected. Credits refunded to user.')
+        setTimeout(() => {
+          alert('Cash-out rejected. Credits refunded to user.')
+        }, 100)
+      } else {
+        alert(data.detail || 'Failed to reject')
       }
     } catch (error) {
-      alert('Failed to reject')
+      console.error('Reject cashout error:', error)
+      alert('Failed to reject - connection error')
+    } finally {
+      setProcessingCashOut(null)
     }
   }
 
@@ -916,12 +979,30 @@ function App() {
         }
       })
       
-      // Keep stream reasonably close to live - check every 5 seconds
+      // Keep stream reasonably close to live - check every 3 seconds
+      let stallCount = 0
       const keepLive = setInterval(() => {
         if (video && hls.liveSyncPosition) {
           const currentTime = video.currentTime
           const livePosition = hls.liveSyncPosition
           const drift = livePosition - currentTime
+          
+          // Check if video is stalled (not progressing)
+          if (video.readyState < 3 || video.paused) {
+            stallCount++
+            console.log(`⚠️ Stream may be stalling (count: ${stallCount})`)
+            
+            // If stalled for too long (9+ seconds), try to recover
+            if (stallCount >= 3) {
+              console.log('🔄 Auto-recovering stalled stream...')
+              stallCount = 0
+              hls.stopLoad()
+              hls.startLoad()
+              video.play().catch(() => {})
+            }
+          } else {
+            stallCount = 0
+          }
           
           // If more than 15 seconds behind, gently catch up
           if (drift > 15) {
@@ -929,7 +1010,15 @@ function App() {
             video.currentTime = livePosition - 3 // Stay 3 sec behind edge for smooth buffer
           }
         }
-      }, 5000)
+      }, 3000)
+      
+      // Listen for buffering events
+      video.addEventListener('waiting', () => {
+        setStreamStatus('buffering')
+      })
+      video.addEventListener('playing', () => {
+        setStreamStatus('playing')
+      })
       
       hlsRef.current = hls
       
@@ -1033,8 +1122,12 @@ function App() {
           const myPayout = data.payouts.find(p => p.user_id === currentUser.id)
           if (myPayout && myPayout.new_credits !== undefined) {
             // Update with ACTUAL credits from server immediately
-            setCurrentUser(prev => ({ ...prev, credits: myPayout.new_credits }))
-            localStorage.setItem('sabong_user', JSON.stringify({ ...currentUser, credits: myPayout.new_credits }))
+            const newCredits = myPayout.new_credits
+            setCurrentUser(prev => {
+              const updated = { ...prev, credits: newCredits }
+              localStorage.setItem('sabong_user', JSON.stringify(updated))
+              return updated
+            })
             
             // Show notification for winners/refunds only
             if (myPayout.payout && myPayout.payout > 0) {
@@ -1049,9 +1142,9 @@ function App() {
           }
         }
         
-        // Refresh all users' credits from database to ensure sync
+        // Refresh all users' credits from database to ensure sync (catches losers too)
         if (currentUser && !isStaff) {
-          refreshUserData()
+          setTimeout(() => refreshUserData(), 1000)
         }
         break
         
@@ -1083,11 +1176,15 @@ function App() {
         break
         
       case 'cashin_approved':
-        // User: their cash-in was approved
+        // User: their cash-in was approved - update credits IMMEDIATELY
         if (currentUser && data.user_id === currentUser.id) {
-          setCurrentUser(prev => ({ ...prev, credits: data.new_credits }))
-          localStorage.setItem('sabong_user', JSON.stringify({ ...currentUser, credits: data.new_credits }))
-          alert(`✅ Your cash-in of ₱${data.amount} was approved! New balance: ₱${data.new_credits}`)
+          const newCredits = data.new_credits
+          setCurrentUser(prev => {
+            const updated = { ...prev, credits: newCredits }
+            localStorage.setItem('sabong_user', JSON.stringify(updated))
+            return updated
+          })
+          alert(`✅ Your cash-in of ₱${data.amount} was approved! New balance: ₱${newCredits.toLocaleString()}`)
           closeCashInModal()
         }
         break
@@ -1108,11 +1205,27 @@ function App() {
         break
         
       case 'cashout_rejected':
-        // User: their cash-out was rejected (refunded)
+        // User: their cash-out was rejected (refunded) - update credits IMMEDIATELY
         if (currentUser && data.user_id === currentUser.id) {
-          setCurrentUser(prev => ({ ...prev, credits: data.new_credits }))
-          localStorage.setItem('sabong_user', JSON.stringify({ ...currentUser, credits: data.new_credits }))
+          const newCredits = data.new_credits
+          setCurrentUser(prev => {
+            const updated = { ...prev, credits: newCredits }
+            localStorage.setItem('sabong_user', JSON.stringify(updated))
+            return updated
+          })
           alert(`Your cash-out was rejected. ₱${data.amount} has been refunded to your account.`)
+        }
+        break
+        
+      case 'credit_update':
+        // Universal credit update - always update if it's for current user
+        if (currentUser && data.user_id === currentUser.id && data.credits !== undefined) {
+          console.log(`💰 Credit update received: ₱${data.credits} (${data.reason || 'update'})`)
+          setCurrentUser(prev => {
+            const updated = { ...prev, credits: data.credits }
+            localStorage.setItem('sabong_user', JSON.stringify(updated))
+            return updated
+          })
         }
         break
     }
@@ -1273,8 +1386,12 @@ function App() {
       
       // Bet successful - update credits from SERVER response (not calculated locally)
       if (data.new_credits !== undefined) {
-        setCurrentUser(prev => ({ ...prev, credits: data.new_credits }))
-        localStorage.setItem('sabong_user', JSON.stringify({ ...currentUser, credits: data.new_credits }))
+        const newCredits = data.new_credits
+        setCurrentUser(prev => {
+          const updated = { ...prev, credits: newCredits }
+          localStorage.setItem('sabong_user', JSON.stringify(updated))
+          return updated
+        })
       }
       
       if (isAdmin) setBetName('')
@@ -1956,15 +2073,16 @@ OR cookie string: session=abc123; token=xyz456'
                 >
                   {audioMuted ? '🔇' : '🔊'}
                 </button>
+                {/* Refresh button for ALL users - helps when stream is lagging */}
+                <button 
+                  className="stream-refresh-btn" 
+                  onClick={refreshStream}
+                  title="Refresh stream if lagging"
+                >
+                  🔄
+                </button>
                 {isAdmin && (
-                  <>
-                    <button className="stream-refresh-btn" onClick={() => {
-                      setStreamStatus('loading')
-                      setShowStream(false)
-                      setTimeout(() => setShowStream(true), 100)
-                    }}>🔄</button>
-                    <button className="stream-close-btn" onClick={() => setShowStream(false)}>✕</button>
-                  </>
+                  <button className="stream-close-btn" onClick={() => setShowStream(false)}>✕</button>
                 )}
               </div>
               <div className="video-container">
@@ -1984,10 +2102,22 @@ OR cookie string: session=abc123; token=xyz456'
                     <p>Loading stream...</p>
                   </div>
                 )}
+                {streamStatus === 'buffering' && (
+                  <div className="stream-loading-overlay buffering">
+                    <div className="loading-spinner large"></div>
+                    <p>Buffering...</p>
+                    <button className="refresh-stream-btn" onClick={refreshStream}>
+                      🔄 Tap to refresh
+                    </button>
+                  </div>
+                )}
                 {streamStatus === 'error' && (
                   <div className="stream-loading-overlay">
                     <div className="loading-spinner large"></div>
                     <p>Reconnecting...</p>
+                    <button className="refresh-stream-btn" onClick={refreshStream}>
+                      🔄 Tap to refresh
+                    </button>
                   </div>
                 )}
                 {streamStatus === 'playing' && (
@@ -2206,12 +2336,14 @@ OR cookie string: session=abc123; token=xyz456'
                       <button 
                         className="approve-btn"
                         onClick={() => approveCashIn(req.id)}
+                        disabled={processingCashIn === req.id}
                       >
-                        ✓
+                        {processingCashIn === req.id ? '...' : '✓'}
                       </button>
                       <button 
                         className="reject-btn"
                         onClick={() => rejectCashIn(req.id)}
+                        disabled={processingCashIn === req.id}
                       >
                         ✗
                       </button>
@@ -2228,7 +2360,7 @@ OR cookie string: session=abc123; token=xyz456'
               <div className="panel-title">💸 PENDING CASH-OUTS ({pendingCashOuts.length})</div>
               <div className="cashin-requests-list">
                 {pendingCashOuts.map(req => (
-                  <div key={req.id} className="cashout-request-item">
+                  <div key={req.id} className={`cashout-request-item ${showCashOutQR === req.id ? 'expanded' : ''}`}>
                     <div className="request-info">
                       <span className="request-user">{req.username}</span>
                       <span className="request-amount out">-₱{req.amount.toLocaleString()}</span>
@@ -2238,20 +2370,62 @@ OR cookie string: session=abc123; token=xyz456'
                     </div>
                     <div className="request-actions">
                       <button 
+                        className="qr-btn"
+                        onClick={() => setShowCashOutQR(showCashOutQR === req.id ? null : req.id)}
+                        title="Show QR Code"
+                      >
+                        📱
+                      </button>
+                      <button 
                         className="approve-btn"
                         onClick={() => approveCashOut(req.id)}
                         title="Approve & Send"
+                        disabled={processingCashOut === req.id}
                       >
-                        ✓
+                        {processingCashOut === req.id ? '...' : '✓'}
                       </button>
                       <button 
                         className="reject-btn"
                         onClick={() => rejectCashOut(req.id)}
                         title="Reject & Refund"
+                        disabled={processingCashOut === req.id}
                       >
                         ✗
                       </button>
                     </div>
+                    {/* QR Code for easy scanning */}
+                    {showCashOutQR === req.id && (
+                      <div className="cashout-qr-section">
+                        <div className="qr-header">
+                          <span>Scan to send ₱{req.amount.toLocaleString()}</span>
+                          <button className="qr-close" onClick={() => setShowCashOutQR(null)}>×</button>
+                        </div>
+                        <div className="qr-container small">
+                          <QRCodeSVG
+                            value={req.gcash_number}
+                            size={140}
+                            level="H"
+                            includeMargin={true}
+                            bgColor="#ffffff"
+                            fgColor="#000000"
+                          />
+                        </div>
+                        <div className="qr-details">
+                          <div className="qr-detail-row">
+                            <span className="label">GCash:</span>
+                            <span className="value">{req.gcash_number}</span>
+                          </div>
+                          <div className="qr-detail-row">
+                            <span className="label">Name:</span>
+                            <span className="value">{req.gcash_name}</span>
+                          </div>
+                          <div className="qr-detail-row highlight">
+                            <span className="label">Amount:</span>
+                            <span className="value">₱{req.amount.toLocaleString()}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
