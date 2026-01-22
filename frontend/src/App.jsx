@@ -764,39 +764,41 @@ function App() {
         hlsRef.current.destroy()
       }
       
-      // Railway Pro - optimized for speed with reasonable buffer
+      // Optimized for smooth playback on mobile - large buffer
       const hls = new Hls({
         enableWorker: true,
-        // Enable low latency since Railway Pro can handle it
-        lowLatencyMode: true,
-        backBufferLength: 30,
-        // Balanced buffer - smooth but not too delayed
-        liveSyncDurationCount: 2,
-        liveMaxLatencyDurationCount: 5,
+        // DISABLE low latency - prioritize smooth playback
+        lowLatencyMode: false,
+        backBufferLength: 60,
+        // Stay behind live edge for buffer room
+        liveSyncDurationCount: 5,        // Stay 10sec behind live
+        liveMaxLatencyDurationCount: 15, // Allow up to 30sec behind
         liveDurationInfinity: true,
-        highBufferWatchdogPeriod: 1,
-        // Moderate buffer
-        maxBufferLength: 15,
-        maxMaxBufferLength: 30,
-        maxBufferSize: 30 * 1000 * 1000,
-        maxBufferHole: 0.5,
-        // Fast timeouts
-        fragLoadingTimeOut: 15000,
-        fragLoadingMaxRetry: 6,
-        fragLoadingRetryDelay: 500,
-        manifestLoadingTimeOut: 15000,
-        manifestLoadingMaxRetry: 4,
-        levelLoadingTimeOut: 15000,
-        levelLoadingMaxRetry: 4,
+        highBufferWatchdogPeriod: 3,
+        // LARGE buffer to prevent stutter
+        maxBufferLength: 60,             // 60 seconds buffer
+        maxMaxBufferLength: 120,         // Up to 2 min buffer
+        maxBufferSize: 100 * 1000 * 1000, // 100MB buffer
+        maxBufferHole: 2,                // Allow 2sec gaps
+        // Generous timeouts for mobile
+        fragLoadingTimeOut: 30000,
+        fragLoadingMaxRetry: 10,
+        fragLoadingRetryDelay: 1000,
+        manifestLoadingTimeOut: 30000,
+        manifestLoadingMaxRetry: 6,
+        levelLoadingTimeOut: 30000,
+        levelLoadingMaxRetry: 6,
         startLevel: -1,
         autoStartLoad: true,
         progressive: true,
+        // Start playback only after buffer is ready
+        startPosition: -1,
         xhrSetup: (xhr, url) => {
           xhr.withCredentials = false
         }
       })
       
-      console.log('📺 Stream player: Low latency mode (Railway Pro)')
+      console.log('📺 Stream player: Smooth mode (large buffer for mobile)')
       
       hls.loadSource(streamUrl)
       hls.attachMedia(video)
