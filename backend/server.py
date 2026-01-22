@@ -249,6 +249,28 @@ async def root():
     return {"message": "Sabong Declarator API", "status": "running"}
 
 
+@app.get("/debug/screenshot")
+async def get_debug_screenshot():
+    """View the login error screenshot for debugging"""
+    import os
+    if os.path.exists("login_error.png"):
+        from fastapi.responses import FileResponse
+        return FileResponse("login_error.png", media_type="image/png")
+    return {"error": "No screenshot available"}
+
+
+@app.get("/debug/html")
+async def get_debug_html():
+    """View the login error HTML for debugging"""
+    import os
+    if os.path.exists("login_error.html"):
+        with open("login_error.html", "r", encoding="utf-8") as f:
+            html = f.read()
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(content=html)
+    return {"error": "No HTML available"}
+
+
 @app.get("/status")
 async def get_status():
     return {
