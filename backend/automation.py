@@ -9,10 +9,15 @@ import re
 from typing import Optional, Callable, List
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext, Request
 
+import os
 from config import (
     PISOPERYA_PHONE, PISOPERYA_PASSWORD, PISOPERYA_ARENA_ID,
     WCC_USERNAME, WCC_PASSWORD, WCC_LOGIN_URL, WCC_STREAM_URL
 )
+
+# Optional proxy support - set PROXY_URL env var to use
+# Format: http://user:pass@host:port or socks5://user:pass@host:port
+PROXY_URL = os.environ.get('PROXY_URL', None)
 
 class PisoperyaAutomation:
     def __init__(self):
@@ -90,14 +95,24 @@ class PisoperyaAutomation:
                 args=local_args
             )
         
+        # Build context options
+        context_options = {
+            'viewport': {'width': 1280, 'height': 720},
+            'permissions': ['geolocation'],
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'locale': 'en-US',
+            'timezone_id': 'Asia/Manila',
+            'color_scheme': 'light',
+            'device_scale_factor': 1,
+        }
+        
+        # Add proxy if configured
+        if PROXY_URL:
+            print(f"🌐 Using proxy: {PROXY_URL.split('@')[-1] if '@' in PROXY_URL else PROXY_URL}")
+            context_options['proxy'] = {'server': PROXY_URL}
+        
         # Create context with viewport and permissions
-        self.context = await self.browser.new_context(
-            viewport={'width': 1280, 'height': 720},
-            permissions=['geolocation'],
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            locale='en-US',
-            timezone_id='Asia/Manila',
-        )
+        self.context = await self.browser.new_context(**context_options)
         
         self.page = await self.context.new_page()
         
@@ -224,61 +239,111 @@ class PisoperyaAutomation:
             print(f"❌ Login error: {str(e)}")
             return False
     
+    async def _human_type(self, element, text: str):
+        """Type text like a human with random delays"""
+        import random
+        await element.click()
+        await asyncio.sleep(random.uniform(0.1, 0.3))
+        for char in text:
+            await element.type(char, delay=random.randint(50, 150))
+            await asyncio.sleep(random.uniform(0.01, 0.05))
+    
+    async def _random_mouse_move(self):
+        """Simulate random mouse movements"""
+        import random
+        for _ in range(random.randint(2, 5)):
+            x = random.randint(100, 1000)
+            y = random.randint(100, 600)
+            await self.page.mouse.move(x, y)
+            await asyncio.sleep(random.uniform(0.1, 0.3))
+
     async def login_wcc(self) -> bool:
-        """Login to WCC Games (Official Site)"""
+        """Login to WCC Games (Official Site) with human-like behavior"""
+        import random
+        
         if not self.page:
             await self.start_browser()
         
         try:
             print("🔐 Navigating to WCC login page...")
-            await self.page.goto(self.wcc_login_url, wait_until="domcontentloaded", timeout=60000)
-            await asyncio.sleep(3)  # Wait for page to fully render
+            
+            # Random delay before navigation (human-like)
+            await asyncio.sleep(random.uniform(1, 2))
+            
+            await self.page.goto(self.wcc_login_url, wait_until="networkidle", timeout=60000)
+            
+            # Random delay and mouse movement (human-like)
+            await asyncio.sleep(random.uniform(2, 4))
+            await self._random_mouse_move()
             
             # Step 1: Click the first login button to open the form
             print("🖱️ Opening login form...")
             try:
-                # Try multiple selectors
-                first_login_btn = self.page.locator('button:has-text("Login"), button:has-text("LOGIN")').first
-                await first_login_btn.wait_for(state="visible", timeout=10000)
+                # Try multiple selectors with longer timeout
+                first_login_btn = self.page.locator('button:has-text("Login"), button:has-text("LOGIN"), a:has-text("Login")').first
+                await first_login_btn.wait_for(state="visible", timeout=15000)
+                await asyncio.sleep(random.uniform(0.5, 1.5))
                 await first_login_btn.click()
             except:
                 # Fallback: try any button in the section
-                first_login_btn = self.page.locator('section button').first
-                await first_login_btn.click()
-            await asyncio.sleep(2)
+                try:
+                    first_login_btn = self.page.locator('section button, header button').first
+                    await first_login_btn.click()
+                except:
+                    print("⚠️ Could not find login button, trying direct form access...")
+            
+            await asyncio.sleep(random.uniform(1.5, 3))
+            await self._random_mouse_move()
             
             # Step 2: Fill username - wait for input to be ready
             print("👤 Entering username...")
-            username_input = self.page.locator('input[autocomplete="username"], input[placeholder*="username" i], input[type="text"]').first
-            await username_input.wait_for(state="visible", timeout=10000)
-            await username_input.click()
-            await asyncio.sleep(0.2)
-            await username_input.fill(self.wcc_username)
-            await asyncio.sleep(0.5)
+            username_input = self.page.locator('input[autocomplete="username"], input[placeholder*="username" i], input[name="username"], input[type="text"]').first
+            await username_input.wait_for(state="visible", timeout=15000)
+            await asyncio.sleep(random.uniform(0.3, 0.8))
+            
+            # Human-like typing
+            await self._human_type(username_input, self.wcc_username)
+            await asyncio.sleep(random.uniform(0.5, 1))
             
             # Step 3: Fill password
             print("🔑 Entering password...")
             password_input = self.page.locator('input[type="password"]').first
-            await password_input.wait_for(state="visible", timeout=5000)
-            await password_input.click()
-            await asyncio.sleep(0.2)
-            await password_input.fill(self.wcc_password)
-            await asyncio.sleep(0.5)
+            await password_input.wait_for(state="visible", timeout=10000)
+            await asyncio.sleep(random.uniform(0.3, 0.8))
+            
+            # Human-like typing
+            await self._human_type(password_input, self.wcc_password)
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+            
+            # Random mouse movement before clicking submit
+            await self._random_mouse_move()
             
             # Step 4: Click LOGIN submit button
             print("🖱️ Clicking LOGIN button...")
-            login_submit = self.page.locator('button[type="submit"]:has-text("LOGIN"), button.bg-red:has-text("LOGIN")').first
-            await login_submit.wait_for(state="visible", timeout=5000)
+            login_submit = self.page.locator('button[type="submit"], button:has-text("LOGIN"), button:has-text("Log In"), button:has-text("Sign In")').first
+            await login_submit.wait_for(state="visible", timeout=10000)
+            await asyncio.sleep(random.uniform(0.3, 0.8))
             await login_submit.click()
             
             print("⏳ Waiting for login to complete...")
-            await asyncio.sleep(5)  # Give more time for login to process
+            await asyncio.sleep(random.uniform(5, 8))  # Give more time for login to process
+            
+            # Check if we're logged in by looking for dashboard elements
+            try:
+                # Look for elements that indicate successful login
+                dashboard = self.page.locator('text=Dashboard, text=Balance, text=ARENA, text=Logout, text=Profile')
+                await dashboard.first.wait_for(state="visible", timeout=10000)
+                print("✅ Dashboard detected - login successful!")
+            except:
+                print("⚠️ Dashboard not detected, checking URL...")
             
             # Step 5: Close any popup that appears
             print("🔄 Checking for popups...")
+            await asyncio.sleep(random.uniform(1, 2))
             try:
-                close_btn = self.page.locator('i.mdi-close, button:has(i.mdi-close), .v-dialog button').first
+                close_btn = self.page.locator('i.mdi-close, button:has(i.mdi-close), .v-dialog button, button[aria-label="Close"], .close-btn').first
                 if await close_btn.is_visible(timeout=3000):
+                    await asyncio.sleep(random.uniform(0.3, 0.8))
                     await close_btn.click()
                     print("✅ Popup closed")
                     await asyncio.sleep(1)
@@ -294,8 +359,13 @@ class PisoperyaAutomation:
             print(f"❌ WCC Login error: {str(e)}")
             # Take screenshot for debugging
             try:
-                await self.page.screenshot(path="login_error.png")
+                await self.page.screenshot(path="login_error.png", full_page=True)
                 print("📸 Screenshot saved to login_error.png")
+                # Also save the page HTML for debugging
+                html = await self.page.content()
+                with open("login_error.html", "w", encoding="utf-8") as f:
+                    f.write(html)
+                print("📄 HTML saved to login_error.html")
             except:
                 pass
             return False
