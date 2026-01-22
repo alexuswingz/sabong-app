@@ -2375,11 +2375,11 @@ OR cookie string: session=abc123; token=xyz456'
                     </div>
                     <div className="request-actions">
                       <button 
-                        className="qr-btn"
+                        className="details-btn"
                         onClick={() => setShowCashOutQR(showCashOutQR === req.id ? null : req.id)}
-                        title="Show QR Code"
+                        title="Show payment details"
                       >
-                        📱
+                        💳
                       </button>
                       <button 
                         className="approve-btn"
@@ -2398,36 +2398,51 @@ OR cookie string: session=abc123; token=xyz456'
                         ✗
                       </button>
                     </div>
-                    {/* QR Code for easy scanning */}
+                    {/* Payment Details Panel - Easy to copy */}
                     {showCashOutQR === req.id && (
                       <div className="cashout-qr-section">
                         <div className="qr-header">
-                          <span>Scan to send ₱{req.amount.toLocaleString()}</span>
+                          <span>💸 Send ₱{req.amount.toLocaleString()}</span>
                           <button className="qr-close" onClick={() => setShowCashOutQR(null)}>×</button>
                         </div>
-                        <div className="qr-container small">
-                          <QRCodeSVG
-                            value={req.gcash_number}
-                            size={140}
-                            level="H"
-                            includeMargin={true}
-                            bgColor="#ffffff"
-                            fgColor="#000000"
-                          />
-                        </div>
-                        <div className="qr-details">
-                          <div className="qr-detail-row">
-                            <span className="label">GCash:</span>
-                            <span className="value">{req.gcash_number}</span>
+                        <div className="payment-details">
+                          <div className="payment-row gcash-number-row">
+                            <span className="label">GCash Number:</span>
+                            <div className="copy-field">
+                              <span className="value large">{req.gcash_number}</span>
+                              <button 
+                                className="copy-btn"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(req.gcash_number)
+                                  alert('📋 Number copied!')
+                                }}
+                              >
+                                📋 Copy
+                              </button>
+                            </div>
                           </div>
-                          <div className="qr-detail-row">
+                          <div className="payment-row">
                             <span className="label">Name:</span>
                             <span className="value">{req.gcash_name}</span>
                           </div>
-                          <div className="qr-detail-row highlight">
+                          <div className="payment-row highlight">
                             <span className="label">Amount:</span>
-                            <span className="value">₱{req.amount.toLocaleString()}</span>
+                            <div className="copy-field">
+                              <span className="value large">₱{req.amount.toLocaleString()}</span>
+                              <button 
+                                className="copy-btn"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(req.amount.toString())
+                                  alert('📋 Amount copied!')
+                                }}
+                              >
+                                📋 Copy
+                              </button>
+                            </div>
                           </div>
+                        </div>
+                        <div className="payment-instructions">
+                          <p>📱 Open GCash/Bank app → Send Money → Paste number</p>
                         </div>
                       </div>
                     )}

@@ -3315,7 +3315,8 @@ body {
   border-color: var(--gold);
 }
 
-.qr-btn {
+.qr-btn,
+.details-btn {
   width: 36px;
   height: 36px;
   border: none;
@@ -3330,9 +3331,100 @@ body {
   transition: all 0.2s;
 }
 
-.qr-btn:hover {
+.qr-btn:hover,
+.details-btn:hover {
   background: rgba(59, 130, 246, 0.25);
   transform: scale(1.05);
+}
+
+/* Payment Details Panel */
+.payment-details {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.payment-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: var(--bg-glass);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+}
+
+.payment-row .label {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.payment-row .value {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.payment-row .value.large {
+  font-size: 1.3rem;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 1px;
+}
+
+.payment-row.highlight {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.payment-row.highlight .value {
+  color: var(--gold);
+}
+
+.gcash-number-row {
+  background: rgba(0, 112, 255, 0.1);
+  border-color: rgba(0, 112, 255, 0.3);
+}
+
+.copy-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.copy-btn {
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+.copy-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.copy-btn:active {
+  transform: scale(0.95);
+}
+
+.payment-instructions {
+  padding: 10px;
+  background: rgba(16, 185, 129, 0.1);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.payment-instructions p {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin: 0;
 }
 
 .cashout-qr-section {
