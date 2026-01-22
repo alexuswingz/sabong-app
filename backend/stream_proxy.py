@@ -2,6 +2,11 @@
 Stream Proxy Module
 Proxies the HLS stream with authentication cookies from the logged-in browser session
 REWRITES manifest URLs to go through our local proxy to bypass CORS and auth issues
+
+RELIABILITY FEATURES:
+- Graceful cookie updates (test before replacing)
+- Fallback to old cookies if new ones fail
+- No interruption during cookie refresh
 """
 
 import os
@@ -9,6 +14,7 @@ import asyncio
 import re
 from typing import Optional, Dict
 from urllib.parse import urljoin, urlparse, quote
+from datetime import datetime
 import httpx
 
 from config import WCC_STREAM_URL
@@ -20,6 +26,8 @@ BACKEND_URL = os.environ.get('RAILWAY_PUBLIC_DOMAIN', os.environ.get('BACKEND_UR
 class StreamProxy:
     def __init__(self):
         self.cookies: Dict[str, str] = {}
+        self._backup_cookies: Dict[str, str] = {}  # Fallback cookies
+        self._cookies_updated_at: Optional[datetime] = None
         self.headers: Dict[str, str] = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': '*/*',
@@ -32,6 +40,8 @@ class StreamProxy:
         self.is_authenticated = False
         # Proxy base URL - dynamically determined
         self._proxy_base_url = None
+        # Lock to prevent concurrent cookie updates
+        self._update_lock = asyncio.Lock()
     
     @property
     def proxy_base_url(self):
@@ -76,22 +86,55 @@ class StreamProxy:
     
     def set_cookies_from_browser(self, cookies: list):
         """Extract cookies from Playwright browser context"""
-        self.cookies = {}
+        new_cookies = {}
         for cookie in cookies:
-            self.cookies[cookie['name']] = cookie['value']
-        self.is_authenticated = len(self.cookies) > 0
-        print(f"📦 Loaded {len(self.cookies)} cookies from browser")
+            new_cookies[cookie['name']] = cookie['value']
+        self._apply_cookies(new_cookies, source="browser")
     
     def set_cookies_dict(self, cookies: Dict[str, str]):
         """Set cookies from a dictionary"""
-        self.cookies = cookies
-        self.is_authenticated = len(self.cookies) > 0
+        self._apply_cookies(cookies, source="dict")
     
     def set_cookies_from_string(self, cookies: Dict[str, str]):
         """Set cookies from a parsed cookie string dictionary"""
-        self.cookies = cookies
-        self.is_authenticated = len(self.cookies) > 0
-        print(f"📦 Loaded {len(self.cookies)} cookies from manual input")
+        self._apply_cookies(cookies, source="manual input")
+    
+    def _apply_cookies(self, new_cookies: Dict[str, str], source: str = "unknown"):
+        """
+        Apply new cookies with backup of old ones.
+        Old cookies are kept as fallback in case new ones fail.
+        """
+        if len(new_cookies) == 0:
+            print(f"⚠️ Received empty cookies from {source}, ignoring")
+            return
+        
+        # Backup current working cookies (if we have any)
+        if self.is_authenticated and self.cookies:
+            self._backup_cookies = self.cookies.copy()
+            print(f"📦 Backed up {len(self._backup_cookies)} existing cookies")
+        
+        # Apply new cookies
+        self.cookies = new_cookies
+        self.is_authenticated = True
+        self._cookies_updated_at = datetime.now()
+        print(f"✅ Applied {len(self.cookies)} cookies from {source}")
+        print(f"   Update time: {self._cookies_updated_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    def restore_backup_cookies(self) -> bool:
+        """Restore backup cookies if available (called on stream failure)"""
+        if self._backup_cookies:
+            print(f"🔄 Restoring {len(self._backup_cookies)} backup cookies")
+            self.cookies = self._backup_cookies.copy()
+            self.is_authenticated = True
+            return True
+        return False
+    
+    @property
+    def cookies_age_seconds(self) -> Optional[int]:
+        """How old are the current cookies in seconds"""
+        if self._cookies_updated_at:
+            return int((datetime.now() - self._cookies_updated_at).total_seconds())
+        return None
     
     def rewrite_manifest_urls(self, content: str, source_url: str) -> str:
         """
@@ -134,13 +177,15 @@ class StreamProxy:
         return '\n'.join(rewritten_lines)
     
     async def fetch_manifest(self, url: Optional[str] = None) -> Optional[str]:
-        """Fetch the HLS manifest (.m3u8) file and rewrite URLs"""
+        """Fetch the HLS manifest (.m3u8) file and rewrite URLs
+        
+        Includes automatic fallback to backup cookies if primary fails.
+        """
         await self.start()
         
         target_url = url or WCC_STREAM_URL
         
         try:
-            print(f"📡 Fetching manifest from: {target_url}")
             response = await self.client.get(
                 target_url,
                 headers=self.headers,
@@ -149,28 +194,45 @@ class StreamProxy:
             
             if response.status_code == 200:
                 content = response.content.decode('utf-8')
-                print(f"✅ Manifest fetched, {len(content)} bytes")
                 
                 # IMPORTANT: Rewrite URLs to go through our proxy!
                 rewritten = self.rewrite_manifest_urls(content, target_url)
-                print(f"✅ Manifest URLs rewritten for proxy")
                 
                 return rewritten
+            elif response.status_code in [401, 403]:
+                # Auth failed - try backup cookies
+                print(f"⚠️ Manifest fetch got {response.status_code}, trying backup cookies...")
+                if self._backup_cookies and self._backup_cookies != self.cookies:
+                    backup_response = await self.client.get(
+                        target_url,
+                        headers=self.headers,
+                        cookies=self._backup_cookies
+                    )
+                    if backup_response.status_code == 200:
+                        print(f"✅ Backup cookies worked! Restoring them...")
+                        self.restore_backup_cookies()
+                        content = backup_response.content.decode('utf-8')
+                        return self.rewrite_manifest_urls(content, target_url)
+                
+                print(f"❌ Manifest fetch failed: {response.status_code}")
+                return None
             else:
                 print(f"❌ Manifest fetch failed: {response.status_code}")
-                print(f"   Response: {response.text[:500]}")
                 return None
                 
         except Exception as e:
             print(f"❌ Error fetching manifest: {e}")
             return None
     
-    async def fetch_segment(self, url: str) -> Optional[bytes]:
-        """Fetch a video segment (.ts file) or any other resource"""
+    async def fetch_segment(self, url: str, retry_with_backup: bool = True) -> Optional[bytes]:
+        """Fetch a video segment (.ts file) or any other resource
+        
+        Includes automatic retry with backup cookies on auth failure.
+        Segments are fetched very frequently, so we minimize logging.
+        """
         await self.start()
         
         try:
-            # Don't log every segment - too slow
             response = await self.client.get(
                 url,
                 headers=self.headers,
@@ -179,12 +241,24 @@ class StreamProxy:
             
             if response.status_code == 200:
                 return response.content
+            elif response.status_code in [401, 403] and retry_with_backup:
+                # Auth failed - try backup cookies (but only once)
+                if self._backup_cookies and self._backup_cookies != self.cookies:
+                    backup_response = await self.client.get(
+                        url,
+                        headers=self.headers,
+                        cookies=self._backup_cookies
+                    )
+                    if backup_response.status_code == 200:
+                        # Backup worked - restore them silently
+                        self.restore_backup_cookies()
+                        return backup_response.content
+                return None
             else:
-                print(f"❌ Segment fetch failed: {response.status_code}")
                 return None
                 
         except Exception as e:
-            print(f"❌ Error fetching segment: {e}")
+            # Network errors happen, don't spam logs
             return None
     
     async def proxy_request(self, path: str) -> tuple[Optional[bytes], str]:

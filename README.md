@@ -66,27 +66,41 @@ npm run dev
 
 ## ⚙️ Configuration
 
-Edit `backend/config.py` to change credentials:
+For **local development**, edit `backend/config.py` or set environment variables.
 
-```python
-# WCC Games Credentials (Official Site) - RECOMMENDED
-WCC_USERNAME = "ajoaquin"
-WCC_PASSWORD = "Noobness1"
-WCC_STREAM_URL = "https://stream.wccgames7.xyz/wccstream/streams/live.m3u8"
+For **Railway deployment**, set these environment variables in Railway dashboard:
+- `DATABASE_URL` - PostgreSQL connection string (auto-set by Railway)
+- `WCC_USERNAME` - Your WCC login username
+- `WCC_PASSWORD` - Your WCC login password
 
-# Pisoperya Credentials (Legacy/Backup)
-PISOPERYA_PHONE = "09306236460"
-PISOPERYA_PASSWORD = "Noobness1"
-PISOPERYA_ARENA_ID = "112"
+> ⚠️ **IMPORTANT**: Never commit credentials to git! Use environment variables.
+
+## 🚀 Railway Deployment
+
+When deployed to Railway, the WCC site blocks headless browsers due to bot protection.
+
+**Solution: Cookie Sync Script**
+
+1. Deploy your app to Railway normally
+2. On your **local PC**, run the cookie sync script:
+   ```
+   cd cookie-sync
+   RUN_SYNC.bat
+   ```
+3. The script will:
+   - Open a visible browser (passes bot checks)
+   - Login to WCC automatically
+   - Push cookies to your Railway backend
+   - Repeat every 4 hours
+
+4. **Keep the script running** while your app is live!
+
+Edit `cookie-sync/config.txt` to set your Railway URL:
 ```
-
-## 📺 Direct Stream URL
-
-The live stream is available at:
+RAILWAY_BACKEND=https://your-app.up.railway.app
+WCC_USERNAME=your_username
+WCC_PASSWORD=your_password
 ```
-https://stream.wccgames7.xyz/wccstream/streams/live.m3u8
-```
-This HLS stream is embedded directly in the app!
 
 ## 🔧 Requirements
 

@@ -32,14 +32,52 @@ except ImportError:
     from playwright.async_api import async_playwright
     import httpx
 
-# Configuration
-WCC_USERNAME = os.environ.get('WCC_USERNAME', 'ajoaquin')
-WCC_PASSWORD = os.environ.get('WCC_PASSWORD', 'Noobness1')
-WCC_LOGIN_URL = "https://www.wccgames8.xyz/"
-RAILWAY_BACKEND = "https://sabong-app-production.up.railway.app"
 
-# How often to refresh cookies (in seconds)
-REFRESH_INTERVAL = 4 * 60 * 60  # 4 hours
+def load_config():
+    """Load configuration from config.txt or use defaults"""
+    config = {
+        'RAILWAY_BACKEND': 'https://YOUR-APP.up.railway.app',
+        'WCC_USERNAME': '',
+        'WCC_PASSWORD': '',
+        'REFRESH_HOURS': 4
+    }
+    
+    config_path = os.path.join(os.path.dirname(__file__), 'config.txt')
+    
+    if os.path.exists(config_path):
+        print(f"📄 Loading config from: config.txt")
+        with open(config_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    config[key.strip()] = value.strip()
+    else:
+        print(f"⚠️ No config.txt found, using defaults")
+        print(f"   Create config.txt to customize settings")
+    
+    # Environment variables override config file
+    config['RAILWAY_BACKEND'] = os.environ.get('RAILWAY_BACKEND', config['RAILWAY_BACKEND'])
+    config['WCC_USERNAME'] = os.environ.get('WCC_USERNAME', config['WCC_USERNAME'])
+    config['WCC_PASSWORD'] = os.environ.get('WCC_PASSWORD', config['WCC_PASSWORD'])
+    
+    return config
+
+
+# Load configuration
+CONFIG = load_config()
+
+# =============================================================================
+# CONFIGURATION VALUES (loaded from config.txt)
+# =============================================================================
+
+WCC_USERNAME = CONFIG['WCC_USERNAME']
+WCC_PASSWORD = CONFIG['WCC_PASSWORD']
+WCC_LOGIN_URL = "https://www.wccgames8.xyz/"
+RAILWAY_BACKEND = CONFIG['RAILWAY_BACKEND']
+REFRESH_INTERVAL = int(CONFIG.get('REFRESH_HOURS', 4)) * 60 * 60
+
+# =============================================================================
 
 
 async def login_and_get_cookies():
@@ -139,9 +177,54 @@ async def login_and_get_cookies():
             return None
 
 
-async def push_cookies_to_railway(cookies: dict):
-    """Push cookies to Railway backend"""
-    print(f"\n📤 Pushing cookies to Railway...")
+async def test_cookies_on_railway(cookies: dict) -> bool:
+    """Test if cookies work on Railway BEFORE replacing current ones"""
+    print(f"\n🧪 Testing cookies on Railway (without replacing)...")
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{RAILWAY_BACKEND}/stream/test-cookies",
+                json={"cookies": json.dumps(cookies)},
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('success'):
+                    print(f"✅ Cookies validated: {result.get('message', 'Valid')}")
+                    return True
+                else:
+                    print(f"⚠️ Cookies invalid: {result.get('error', 'Unknown error')}")
+                    return False
+            else:
+                print(f"⚠️ Test endpoint failed: {response.status_code}")
+                # Fallback - push anyway if test endpoint doesn't exist
+                return True
+                
+    except Exception as e:
+        print(f"⚠️ Could not test cookies: {e}")
+        # Fallback - push anyway
+        return True
+
+
+async def push_cookies_to_railway(cookies: dict, force: bool = False):
+    """Push cookies to Railway backend
+    
+    Args:
+        cookies: Dict of cookies to push
+        force: If True, skip validation and push anyway
+    """
+    # First, test the cookies (unless forced)
+    if not force:
+        is_valid = await test_cookies_on_railway(cookies)
+        if not is_valid:
+            print(f"⚠️ New cookies failed validation!")
+            print(f"   Current stream may still be working with old cookies.")
+            print(f"   Skipping push to avoid breaking the stream.")
+            return False
+    
+    print(f"\n📤 Pushing validated cookies to Railway...")
     
     try:
         async with httpx.AsyncClient() as client:
@@ -165,8 +248,8 @@ async def push_cookies_to_railway(cookies: dict):
 
 
 async def verify_stream():
-    """Verify the stream is working"""
-    print(f"\n🔍 Verifying stream...")
+    """Verify the stream is working and show health status"""
+    print(f"\n🔍 Verifying stream status...")
     
     try:
         async with httpx.AsyncClient() as client:
@@ -178,7 +261,24 @@ async def verify_stream():
             if response.status_code == 200:
                 status = response.json()
                 if status.get('authenticated'):
-                    print(f"✅ Stream authenticated with {status.get('cookies_count', 0)} cookies")
+                    cookies_count = status.get('cookies_count', 0)
+                    cookies_age = status.get('cookies_age', 'unknown')
+                    cookies_health = status.get('cookies_health', 'unknown')
+                    has_backup = status.get('has_backup_cookies', False)
+                    
+                    health_emoji = {
+                        'fresh': '🟢',
+                        'good': '🟢', 
+                        'aging': '🟡',
+                        'stale': '🔴',
+                        'unknown': '⚪'
+                    }.get(cookies_health, '⚪')
+                    
+                    print(f"✅ Stream is LIVE!")
+                    print(f"   Cookies: {cookies_count}")
+                    print(f"   Age: {cookies_age}")
+                    print(f"   Health: {health_emoji} {cookies_health}")
+                    print(f"   Backup: {'Yes' if has_backup else 'No'}")
                     return True
                 else:
                     print("❌ Stream not authenticated")
@@ -194,14 +294,43 @@ async def verify_stream():
 
 async def main():
     """Main loop - sync cookies periodically"""
+    print("")
     print("=" * 60)
-    print("🚀 WCC Cookie Sync Script")
+    print("  🚀 WCC Cookie Sync Script")
     print("=" * 60)
-    print(f"Username: {WCC_USERNAME}")
-    print(f"Railway: {RAILWAY_BACKEND}")
-    print(f"Refresh: Every {REFRESH_INTERVAL // 3600} hours")
+    print(f"  Username:  {WCC_USERNAME or '(NOT SET)'}")
+    print(f"  Railway:   {RAILWAY_BACKEND}")
+    print(f"  Refresh:   Every {REFRESH_INTERVAL // 3600} hours")
     print("=" * 60)
-    print("\nPress Ctrl+C to stop\n")
+    
+    # Validate configuration
+    errors = []
+    if not WCC_USERNAME or WCC_USERNAME == '':
+        errors.append("WCC_USERNAME is not set")
+    if not WCC_PASSWORD or WCC_PASSWORD == '':
+        errors.append("WCC_PASSWORD is not set")
+    if 'YOUR-' in RAILWAY_BACKEND or not RAILWAY_BACKEND.startswith('http'):
+        errors.append("RAILWAY_BACKEND URL is not configured")
+    
+    if errors:
+        print("")
+        print("  ❌ CONFIGURATION ERRORS:")
+        for err in errors:
+            print(f"     - {err}")
+        print("")
+        print("  📝 Edit config.txt with your settings:")
+        print(f"     {os.path.join(os.path.dirname(__file__), 'config.txt')}")
+        print("")
+        print("=" * 60)
+        input("  Press Enter to exit...")
+        return
+    
+    print("")
+    print("  📝 Edit config.txt to change these settings")
+    print("")
+    print("  Press Ctrl+C to stop")
+    print("=" * 60)
+    print("")
     
     while True:
         try:

@@ -1,0 +1,15 @@
+# Cookie Sync Configuration
+# ========================
+# Edit these values and save the file
+
+# Your Railway backend URL (find in Railway dashboard -> Domains)
+# Example: https://sabong-app-production.up.railway.app
+RAILWAY_BACKEND=https://YOUR-RAILWAY-APP.up.railway.app
+
+# WCC Login credentials
+WCC_USERNAME=your_wcc_username
+WCC_PASSWORD=your_wcc_password
+
+# Refresh interval in hours (how often to re-login and push cookies)
+# WCC sessions last about 4-8 hours, so 4 is safe
+REFRESH_HOURS=4

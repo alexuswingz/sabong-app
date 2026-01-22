@@ -1714,7 +1714,10 @@ OR cookie string: session=abc123; token=xyz456'
               ) : (
                 <div className="auto-login-status">
                   <div className="loading-spinner"></div>
-                  <p>⏳ Waiting for stream...</p>
+                  <p>⏳ Waiting for stream cookies...</p>
+                  <p className="cookie-hint">
+                    Run <code>cookie-sync/RUN_SYNC.bat</code> on your PC
+                  </p>
                   {isAdmin && (
                     <button 
                       className="cookie-btn"

@@ -50,21 +50,39 @@ state = AppState()
 
 
 async def auto_login_wcc():
-    """Automatically login to WCC and set up stream proxy"""
-    max_retries = 3
+    """Automatically login to WCC and set up stream proxy
     
-    # Check configuration first
-    if not WCC_USERNAME:
-        print("❌ Cannot auto-login: WCC_USERNAME not configured")
-        print("   Set WCC_USERNAME and WCC_PASSWORD in Railway environment variables")
+    NOTE: On Railway/production, auto-login will likely FAIL due to bot protection.
+    The WCC site uses advanced detection that blocks headless browsers.
+    
+    RECOMMENDED: Use the cookie-sync script locally to push cookies to Railway.
+    Run: sabong-app/cookie-sync/RUN_SYNC.bat on your local PC
+    """
+    
+    # Skip auto-login on Railway - it won't work due to bot protection
+    if IS_PRODUCTION:
+        print("=" * 60)
+        print("🚫 AUTO-LOGIN SKIPPED ON RAILWAY")
+        print("=" * 60)
+        print("   WCC uses bot protection that blocks headless browsers.")
+        print("   Even with residential proxies, Railway headless browsers fail.")
+        print("")
+        print("✅ SOLUTION: Use the local cookie-sync script!")
+        print("   1. On your LOCAL PC, run: cookie-sync/RUN_SYNC.bat")
+        print("   2. It will login with a visible browser (passes bot checks)")
+        print("   3. Cookies are automatically pushed to this Railway server")
+        print("   4. Keep the script running - it refreshes every 4 hours")
+        print("")
+        print("🍪 Or manually set cookies via: POST /stream/set-cookies")
+        print("=" * 60)
         return
     
-    if IS_PRODUCTION and not PROXY_URL:
-        print("⚠️ WARNING: Running in production without PROXY_URL")
-        print("   Bot protection will likely block login attempts!")
-        print("   Add a residential proxy to bypass this:")
-        print("   - IPRoyal: ~$7/GB - https://iproyal.com")
-        print("   - Smartproxy: ~$12/GB - https://smartproxy.com")
+    # LOCAL DEVELOPMENT: Auto-login works with visible browser
+    max_retries = 3
+    
+    if not WCC_USERNAME:
+        print("❌ Cannot auto-login: WCC_USERNAME not configured")
+        return
     
     for attempt in range(max_retries):
         try:
@@ -77,8 +95,7 @@ async def auto_login_wcc():
                 except:
                     pass
             
-            # Start browser
-            # HEADLESS_MODE from config: True for deployment, False for local
+            # Start browser - use visible browser locally for better success
             state.automation = PisoperyaAutomation()
             await state.automation.start_browser(headless=HEADLESS_MODE)
             state.is_browser_running = True
@@ -964,7 +981,10 @@ async def proxy_segment_by_path(path: str):
 
 @app.get("/stream/status")
 async def stream_status():
-    """Check if stream is ready - supports both direct and proxy modes"""
+    """Check if stream is ready - supports both direct and proxy modes
+    
+    Also returns cookie health information for monitoring.
+    """
     
     # Direct mode: Users connect directly to stream (scalable)
     if STREAM_MODE == 'direct' and DIRECT_STREAM_URL:
@@ -976,16 +996,38 @@ async def stream_status():
             "max_users": "unlimited"
         }
     
+    # Calculate cookie age for health monitoring
+    cookies_age = stream_proxy.cookies_age_seconds
+    cookies_age_str = None
+    cookies_health = "unknown"
+    
+    if cookies_age is not None:
+        hours = cookies_age // 3600
+        minutes = (cookies_age % 3600) // 60
+        cookies_age_str = f"{hours}h {minutes}m"
+        
+        # Health assessment (WCC sessions typically last 4-8 hours)
+        if cookies_age < 3600:  # < 1 hour
+            cookies_health = "fresh"
+        elif cookies_age < 14400:  # < 4 hours
+            cookies_health = "good"
+        elif cookies_age < 28800:  # < 8 hours
+            cookies_health = "aging"
+        else:
+            cookies_health = "stale"
+    
     # Proxy mode: Stream goes through our server (limited scale)
     return {
         "mode": "proxy",
         "authenticated": stream_proxy.is_authenticated,
         "cookies_count": len(stream_proxy.cookies),
+        "cookies_age": cookies_age_str,
+        "cookies_health": cookies_health,
+        "has_backup_cookies": bool(stream_proxy._backup_cookies),
         "stream_url": "/stream/live.m3u8" if stream_proxy.is_authenticated else None,
         "direct_url": WCC_STREAM_URL,
         "scalable": False,
-        "max_users": "~50-100 (bandwidth limited)",
-        "warning": "Proxy mode not recommended for production. Set STREAM_MODE=direct and DIRECT_STREAM_URL for scale."
+        "max_users": "~50-100 (bandwidth limited)"
     }
 
 
@@ -1000,8 +1042,69 @@ async def export_cookies():
         "cookies": stream_proxy.cookies,
         "cookies_json": json.dumps(stream_proxy.cookies),
         "count": len(stream_proxy.cookies),
+        "cookies_age_seconds": stream_proxy.cookies_age_seconds,
+        "has_backup": bool(stream_proxy._backup_cookies),
         "instruction": "Copy cookies_json and paste into /stream/set-cookies on your production server"
     }
+
+
+@app.post("/stream/test-cookies")
+async def test_cookies(data: ManualCookies):
+    """Test if cookies work WITHOUT replacing current ones.
+    
+    Use this to validate cookies before pushing.
+    Returns success if the cookies can fetch the stream manifest.
+    """
+    import json
+    
+    try:
+        cookies_str = data.cookies.strip()
+        
+        # Parse cookies
+        if cookies_str.startswith('{'):
+            test_cookies = json.loads(cookies_str)
+        elif cookies_str.startswith('['):
+            cookies_list = json.loads(cookies_str)
+            test_cookies = {c['name']: c['value'] for c in cookies_list}
+        else:
+            test_cookies = {}
+            for part in cookies_str.split(';'):
+                part = part.strip()
+                if '=' in part:
+                    name, value = part.split('=', 1)
+                    test_cookies[name.strip()] = value.strip()
+        
+        if not test_cookies:
+            return {"success": False, "error": "No cookies parsed"}
+        
+        # Test the cookies by fetching the manifest
+        async with httpx.AsyncClient(timeout=30, verify=False) as client:
+            response = await client.get(
+                WCC_STREAM_URL,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Referer': 'https://www.wccgames8.xyz/',
+                },
+                cookies=test_cookies
+            )
+            
+            if response.status_code == 200 and '#EXTM3U' in response.text:
+                return {
+                    "success": True,
+                    "message": f"Cookies are valid! ({len(test_cookies)} cookies)",
+                    "can_apply": True
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Cookies invalid - got status {response.status_code}",
+                    "can_apply": False
+                }
+                
+    except json.JSONDecodeError:
+        return {"success": False, "error": "Invalid JSON format"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @app.post("/stream/set-cookies")

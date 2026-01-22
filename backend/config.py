@@ -51,10 +51,10 @@ MAX_WEBSOCKET_CONNECTIONS = int(os.environ.get('MAX_WEBSOCKET_CONNECTIONS', '500
 WCC_LOGIN_URL = "https://www.wccgames8.xyz/en/login"
 WCC_STREAM_URL = "https://stream.wccgames7.xyz/wccstream/streams/live.m3u8"
 
-# Legacy Pisoperya (backup)
-PISOPERYA_PHONE = "09306236460"
-PISOPERYA_PASSWORD = "Noobness1"
-PISOPERYA_ARENA_ID = "112"
+# Legacy Pisoperya (backup) - Set via environment variables if needed
+PISOPERYA_PHONE = os.environ.get('PISOPERYA_PHONE', '')
+PISOPERYA_PASSWORD = os.environ.get('PISOPERYA_PASSWORD', '')
+PISOPERYA_ARENA_ID = os.environ.get('PISOPERYA_ARENA_ID', '112')
 PISOPERYA_LOGIN_URL = "https://pisoperya.app/login"
 PISOPERYA_PLAY_URL = f"https://pisoperya.app/play/{PISOPERYA_ARENA_ID}"
 
