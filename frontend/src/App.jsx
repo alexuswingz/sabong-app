@@ -782,43 +782,38 @@ function App() {
         hlsRef.current.destroy()
       }
       
-      // Detect mobile for optimized settings
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
-      
+      // Proxy stream needs more buffering - disable low latency for stability
       const hls = new Hls({
         enableWorker: true,
-        // Mobile: prioritize smooth playback over low latency
-        lowLatencyMode: !isMobile,
-        // Buffer more on mobile for smoother playback
-        liveSyncDurationCount: isMobile ? 3 : 1,
-        liveMaxLatencyDurationCount: isMobile ? 6 : 3,
+        // DISABLE low latency - proxy adds too much delay
+        lowLatencyMode: false,
+        // Large buffer = smooth playback (accepts ~10sec delay)
+        liveSyncDurationCount: 4,
+        liveMaxLatencyDurationCount: 10,
         liveDurationInfinity: true,
-        highBufferWatchdogPeriod: isMobile ? 2 : 1,
-        // Larger buffer for mobile to prevent stutter
-        maxBufferLength: isMobile ? 30 : 10,
-        maxMaxBufferLength: isMobile ? 60 : 30,
-        maxBufferSize: isMobile ? 60 * 1000 * 1000 : 30 * 1000 * 1000,
-        maxBufferHole: isMobile ? 1 : 0.5,
-        // More forgiving timeouts for mobile networks
-        fragLoadingTimeOut: isMobile ? 30000 : 20000,
-        fragLoadingMaxRetry: isMobile ? 8 : 6,
-        fragLoadingRetryDelay: 1000,
-        manifestLoadingTimeOut: isMobile ? 30000 : 20000,
+        highBufferWatchdogPeriod: 2,
+        // Big buffer to prevent stuttering
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+        maxBufferSize: 60 * 1000 * 1000,
+        maxBufferHole: 1.5,
+        // Generous timeouts for proxy
+        fragLoadingTimeOut: 30000,
+        fragLoadingMaxRetry: 10,
+        fragLoadingRetryDelay: 500,
+        manifestLoadingTimeOut: 30000,
         manifestLoadingMaxRetry: 6,
-        levelLoadingTimeOut: isMobile ? 30000 : 20000,
+        levelLoadingTimeOut: 30000,
         levelLoadingMaxRetry: 6,
         startLevel: -1,
         autoStartLoad: true,
-        // Progressive loading helps on mobile
         progressive: true,
         xhrSetup: (xhr, url) => {
           xhr.withCredentials = false
         }
       })
       
-      if (isMobile) {
-        console.log('📱 Mobile detected - using smooth playback mode')
-      }
+      console.log('📺 Stream player: Smooth mode (buffered for proxy)')
       
       hls.loadSource(streamUrl)
       hls.attachMedia(video)
