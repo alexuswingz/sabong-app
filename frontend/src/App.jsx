@@ -753,36 +753,13 @@ function App() {
     const video = videoRef.current
     setStreamStatus('loading')
     
-    // Check if native HLS is supported (Safari/iOS) - use native for best mobile performance
+    // Detect device type for logging
     const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent)
-    const canPlayNativeHLS = video.canPlayType('application/vnd.apple.mpegurl')
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
     
-    if (isIOS && canPlayNativeHLS) {
-      // Use native Safari HLS - much smoother on iPhone
-      console.log('🍎 iOS detected - using native HLS playback for best performance')
-      // MUST set muted before play for autoplay to work on iOS
-      video.muted = true
-      video.playsInline = true
-      video.src = streamUrl
-      video.addEventListener('loadedmetadata', () => {
-        console.log('✅ Native HLS loaded')
-        setStreamStatus('playing')
-        // Ensure muted for autoplay policy
-        video.muted = true
-        video.play().catch(e => console.log('Autoplay prevented:', e))
-      })
-      video.addEventListener('error', (e) => {
-        console.error('Native HLS error:', e)
-        setStreamStatus('error')
-      })
-      return () => {
-        video.src = ''
-        video.removeEventListener('loadedmetadata', () => {})
-        video.removeEventListener('error', () => {})
-      }
-    }
-    
+    // Always use HLS.js - better error recovery than native player for proxy streams
     if (Hls.isSupported()) {
+      console.log(isIOS ? '🍎 iOS detected - using HLS.js for reliable proxy streaming' : '📺 Using HLS.js player')
       if (hlsRef.current) {
         hlsRef.current.destroy()
       }
@@ -827,6 +804,8 @@ function App() {
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         console.log('✅ Stream loaded - Low latency mode active')
         setStreamStatus('playing')
+        // Ensure muted for autoplay to work on mobile
+        video.muted = true
         video.play().catch(e => console.log('Autoplay prevented:', e))
       })
       
