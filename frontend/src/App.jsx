@@ -764,41 +764,41 @@ function App() {
         hlsRef.current.destroy()
       }
       
-      // Optimized for smooth playback on mobile - large buffer
+      // LOW LATENCY MODE - Stay close to live edge
       const hls = new Hls({
         enableWorker: true,
-        // DISABLE low latency - prioritize smooth playback
-        lowLatencyMode: false,
-        backBufferLength: 60,
-        // Stay behind live edge for buffer room
-        liveSyncDurationCount: 5,        // Stay 10sec behind live
-        liveMaxLatencyDurationCount: 15, // Allow up to 30sec behind
+        // ENABLE low latency for real-time viewing
+        lowLatencyMode: true,
+        backBufferLength: 30,
+        // Stay close to live edge
+        liveSyncDurationCount: 2,        // Stay only 4sec behind live
+        liveMaxLatencyDurationCount: 5,  // Max 10sec behind before catching up
         liveDurationInfinity: true,
-        highBufferWatchdogPeriod: 3,
-        // LARGE buffer to prevent stutter
-        maxBufferLength: 60,             // 60 seconds buffer
-        maxMaxBufferLength: 120,         // Up to 2 min buffer
-        maxBufferSize: 100 * 1000 * 1000, // 100MB buffer
-        maxBufferHole: 2,                // Allow 2sec gaps
-        // Generous timeouts for mobile
-        fragLoadingTimeOut: 30000,
-        fragLoadingMaxRetry: 10,
-        fragLoadingRetryDelay: 1000,
-        manifestLoadingTimeOut: 30000,
-        manifestLoadingMaxRetry: 6,
-        levelLoadingTimeOut: 30000,
-        levelLoadingMaxRetry: 6,
+        highBufferWatchdogPeriod: 1,
+        // Smaller buffer for lower latency
+        maxBufferLength: 10,             // 10 seconds buffer
+        maxMaxBufferLength: 30,          // Max 30 sec buffer
+        maxBufferSize: 30 * 1000 * 1000, // 30MB buffer
+        maxBufferHole: 0.5,              // Smaller gaps allowed
+        // Faster timeouts for responsiveness
+        fragLoadingTimeOut: 20000,
+        fragLoadingMaxRetry: 6,
+        fragLoadingRetryDelay: 500,
+        manifestLoadingTimeOut: 15000,
+        manifestLoadingMaxRetry: 4,
+        levelLoadingTimeOut: 15000,
+        levelLoadingMaxRetry: 4,
         startLevel: -1,
         autoStartLoad: true,
         progressive: true,
-        // Start playback only after buffer is ready
+        // Start at live edge
         startPosition: -1,
         xhrSetup: (xhr, url) => {
           xhr.withCredentials = false
         }
       })
       
-      console.log('📺 Stream player: Smooth mode (large buffer for mobile)')
+      console.log('📺 Stream player: Low latency mode (close to live)')
       
       hls.loadSource(streamUrl)
       hls.attachMedia(video)
@@ -841,18 +841,20 @@ function App() {
         }
       })
       
+      // Keep stream close to live - check every 2 seconds
       const keepLive = setInterval(() => {
         if (video && hls.liveSyncPosition) {
           const currentTime = video.currentTime
           const livePosition = hls.liveSyncPosition
           const drift = livePosition - currentTime
           
-          if (drift > 3) {
+          // If more than 5 seconds behind, jump to live
+          if (drift > 5) {
             console.log(`⏩ Syncing to live (was ${drift.toFixed(1)}s behind)`)
-            video.currentTime = livePosition
+            video.currentTime = livePosition - 1 // Stay 1 sec behind edge for buffer
           }
         }
-      }, 5000)
+      }, 2000)
       
       hlsRef.current = hls
       
@@ -1821,7 +1823,17 @@ OR cookie string: session=abc123; token=xyz456'
                   </div>
                 )}
                 {streamStatus === 'playing' && (
-                  <div className="live-indicator">
+                  <div 
+                    className="live-indicator clickable"
+                    onClick={() => {
+                      // Jump to live edge when clicked
+                      if (videoRef.current && hlsRef.current?.liveSyncPosition) {
+                        videoRef.current.currentTime = hlsRef.current.liveSyncPosition - 0.5
+                        console.log('⏩ Manually synced to live')
+                      }
+                    }}
+                    title="Click to sync to live"
+                  >
                     <span className="live-dot"></span> LIVE
                   </div>
                 )}

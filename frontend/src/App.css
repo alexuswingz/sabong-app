@@ -342,6 +342,20 @@ body {
   box-shadow: 0 2px 10px var(--meron-glow);
 }
 
+.live-indicator.clickable {
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.live-indicator.clickable:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 15px var(--meron-glow);
+}
+
+.live-indicator.clickable:active {
+  transform: scale(0.95);
+}
+
 .live-dot {
   width: 6px;
   height: 6px;
