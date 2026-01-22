@@ -140,10 +140,21 @@ class PisoperyaAutomation:
         
         # Add proxy if configured - REQUIRED for production to bypass bot protection
         if PROXY_URL:
-            # Hide credentials in log
-            proxy_display = PROXY_URL.split('@')[-1] if '@' in PROXY_URL else PROXY_URL
-            print(f"🌐 Using residential proxy: {proxy_display}")
-            context_options['proxy'] = {'server': PROXY_URL}
+            # Parse proxy URL: http://user:pass@host:port
+            from urllib.parse import urlparse
+            parsed = urlparse(PROXY_URL)
+            
+            proxy_config = {
+                'server': f'{parsed.scheme}://{parsed.hostname}:{parsed.port}'
+            }
+            
+            # Add credentials if present
+            if parsed.username and parsed.password:
+                proxy_config['username'] = parsed.username
+                proxy_config['password'] = parsed.password
+            
+            print(f"🌐 Using residential proxy: {parsed.hostname}:{parsed.port}")
+            context_options['proxy'] = proxy_config
         elif IS_PRODUCTION:
             print("⚠️ WARNING: No PROXY_URL configured! Bot protection will likely block login.")
             print("   Add a residential proxy to Railway environment variables.")
