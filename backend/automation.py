@@ -439,17 +439,27 @@ class PisoperyaAutomation:
             # Random delay before navigation (human-like)
             await asyncio.sleep(random.uniform(0.5, 1.5))
             
-            # Navigate with longer timeout
-            await self.page.goto(self.wcc_login_url, wait_until="domcontentloaded", timeout=60000)
+            # Navigate and wait for network to be idle (JavaScript fully loaded)
+            await self.page.goto(self.wcc_login_url, wait_until="networkidle", timeout=60000)
             
-            # Wait for the page to fully load and any security challenge to complete
-            await asyncio.sleep(random.uniform(3, 5))
+            # Wait for the page to fully load
+            await asyncio.sleep(random.uniform(2, 3))
             
             # Wait for security challenge if present (residential proxy should pass faster)
             await self._wait_for_security_challenge(max_wait=45)
             
+            # IMPORTANT: Wait for JavaScript to render the login form
+            print("⏳ Waiting for login form to render...")
+            try:
+                # Wait for any input field to appear (form rendered)
+                await self.page.wait_for_selector('input', state='visible', timeout=30000)
+                print("✅ Form inputs detected!")
+            except:
+                print("⚠️ No inputs found after 30s, trying to wait more...")
+                await asyncio.sleep(5)
+            
             # Additional wait for page to stabilize
-            await asyncio.sleep(random.uniform(2, 4))
+            await asyncio.sleep(random.uniform(1, 2))
             await self._random_mouse_move()
             
             # Take debug screenshot of the page
