@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import List, Dict, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Response
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -848,13 +848,18 @@ async def extract_cookies():
 # ============ STREAM PROXY ENDPOINTS ============
 
 @app.get("/stream/live.m3u8")
-async def get_stream_manifest():
+async def get_stream_manifest(request: Request):
     """Proxy the HLS manifest file"""
     if not stream_proxy.is_authenticated:
         raise HTTPException(
             status_code=401, 
             detail="Not authenticated. Login and extract cookies first."
         )
+    
+    # Set the proxy base URL based on the request host
+    host = request.headers.get('host', 'localhost:8000')
+    scheme = 'https' if 'railway.app' in host or request.headers.get('x-forwarded-proto') == 'https' else 'http'
+    stream_proxy.proxy_base_url = f"{scheme}://{host}/stream"
     
     content = await stream_proxy.fetch_manifest()
     

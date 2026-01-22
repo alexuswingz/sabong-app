@@ -4,6 +4,7 @@ Proxies the HLS stream with authentication cookies from the logged-in browser se
 REWRITES manifest URLs to go through our local proxy to bypass CORS and auth issues
 """
 
+import os
 import asyncio
 import re
 from typing import Optional, Dict
@@ -11,6 +12,9 @@ from urllib.parse import urljoin, urlparse, quote
 import httpx
 
 from config import WCC_STREAM_URL
+
+# Get the backend URL from environment or use localhost for dev
+BACKEND_URL = os.environ.get('RAILWAY_PUBLIC_DOMAIN', os.environ.get('BACKEND_URL', ''))
 
 
 class StreamProxy:
@@ -26,8 +30,28 @@ class StreamProxy:
         self.base_url = WCC_STREAM_URL.rsplit('/', 1)[0] + '/'
         self.client: Optional[httpx.AsyncClient] = None
         self.is_authenticated = False
-        # Local proxy base URL - the frontend will use this
-        self.proxy_base_url = "http://localhost:8000/stream"
+        # Proxy base URL - dynamically determined
+        self._proxy_base_url = None
+    
+    @property
+    def proxy_base_url(self):
+        """Get the proxy base URL - uses Railway domain if available"""
+        if self._proxy_base_url:
+            return self._proxy_base_url
+        
+        if BACKEND_URL:
+            # Railway or configured backend URL
+            if BACKEND_URL.startswith('http'):
+                return f"{BACKEND_URL}/stream"
+            else:
+                return f"https://{BACKEND_URL}/stream"
+        
+        # Fallback to localhost for development
+        return "http://localhost:8000/stream"
+    
+    @proxy_base_url.setter
+    def proxy_base_url(self, value):
+        self._proxy_base_url = value
     
     async def start(self):
         """Initialize the HTTP client"""
