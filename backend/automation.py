@@ -87,22 +87,15 @@ class PisoperyaAutomation:
                 '--disable-renderer-backgrounding',
                 '--force-color-profile=srgb',
             ]
-            # Run with xvfb virtual display instead of headless for better compatibility
-            # This makes the browser think it has a real display
-            self.browser = await self.playwright.chromium.launch(
-                headless=headless,
-                args=stealth_args,
-                chromium_sandbox=False
+            # Try Firefox - often less detectable than Chromium
+            # Firefox headless is newer and less fingerprinted
+            self.browser = await self.playwright.firefox.launch(
+                headless=headless
             )
         else:
-            # LOCAL MODE - off-screen window (won't be visible)
-            local_args = common_args + [
-                '--window-position=-2000,-2000',
-                '--window-size=800,600',
-            ]
-            self.browser = await self.playwright.chromium.launch(
-                headless=False,
-                args=local_args
+            # LOCAL MODE - use Firefox for consistency
+            self.browser = await self.playwright.firefox.launch(
+                headless=False
             )
         
         # Randomize viewport slightly for fingerprint uniqueness
@@ -110,33 +103,12 @@ class PisoperyaAutomation:
         viewport_width = 1280 + random.randint(-20, 20)
         viewport_height = 720 + random.randint(-10, 10)
         
-        # Build context options with more realistic fingerprint
+        # Build context options - Firefox compatible
         context_options = {
             'viewport': {'width': viewport_width, 'height': viewport_height},
-            'permissions': ['geolocation'],
-            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
             'locale': 'en-PH',
             'timezone_id': 'Asia/Manila',
-            'color_scheme': 'light',
-            'device_scale_factor': 1,
-            'has_touch': False,
-            'is_mobile': False,
-            'java_script_enabled': True,
-            'accept_downloads': False,
-            'extra_http_headers': {
-                'Accept-Language': 'en-PH,en-US;q=0.9,en;q=0.8',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Cache-Control': 'max-age=0',
-                'Sec-Ch-Ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-                'Sec-Ch-Ua-Mobile': '?0',
-                'Sec-Ch-Ua-Platform': '"Windows"',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Upgrade-Insecure-Requests': '1',
-            }
         }
         
         # Add proxy if configured - REQUIRED for production to bypass bot protection
