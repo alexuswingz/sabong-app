@@ -989,20 +989,28 @@ async def stream_status():
     }
 
 
+@app.get("/stream/export-cookies")
+async def export_cookies():
+    """Export current cookies as JSON (for copying to another server)"""
+    if not stream_proxy.cookies:
+        raise HTTPException(status_code=404, detail="No cookies available. Login first.")
+    
+    import json
+    return {
+        "cookies": stream_proxy.cookies,
+        "cookies_json": json.dumps(stream_proxy.cookies),
+        "count": len(stream_proxy.cookies),
+        "instruction": "Copy cookies_json and paste into /stream/set-cookies on your production server"
+    }
+
+
 @app.post("/stream/set-cookies")
 async def set_manual_cookies(data: ManualCookies):
-    """Manually set cookies for stream proxy (admin only)
-    
-    This allows you to login from your own browser and paste cookies here.
-    
-    How to get cookies:
-    1. Login to WCC in your browser (Chrome/Firefox)
-    2. Open DevTools (F12) → Application tab → Cookies
-    3. Copy all cookies for the domain
-    4. Paste here as JSON array or as cookie header string
+    """Manually set cookies for stream proxy
     
     Accepts formats:
-    - JSON array: [{"name": "session", "value": "abc123", "domain": ".wccgames8.xyz"}, ...]
+    - JSON object: {"cookie1": "value1", "cookie2": "value2"}
+    - JSON array: [{"name": "session", "value": "abc123"}, ...]
     - Cookie header: "session=abc123; token=xyz456; ..."
     """
     import json
@@ -1010,13 +1018,19 @@ async def set_manual_cookies(data: ManualCookies):
     try:
         cookies_str = data.cookies.strip()
         
-        # Try to parse as JSON array first
-        if cookies_str.startswith('['):
+        # Try to parse as JSON
+        if cookies_str.startswith('{'):
+            # JSON object/dict format
+            cookies_dict = json.loads(cookies_str)
+            stream_proxy.set_cookies_from_string(cookies_dict)
+            count = len(cookies_dict)
+        elif cookies_str.startswith('['):
+            # JSON array format (from browser)
             cookies_list = json.loads(cookies_str)
             stream_proxy.set_cookies_from_browser(cookies_list)
             count = len(cookies_list)
         else:
-            # Parse as cookie header string (name=value; name2=value2)
+            # Cookie header string format (name=value; name2=value2)
             cookies_dict = {}
             for part in cookies_str.split(';'):
                 part = part.strip()
