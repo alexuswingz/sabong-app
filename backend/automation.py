@@ -87,9 +87,10 @@ class PisoperyaAutomation:
                 '--disable-renderer-backgrounding',
                 '--force-color-profile=srgb',
             ]
-            # Use channel for more realistic browser fingerprint
+            # Use "new" headless mode - less detectable than old headless
+            # headless="new" runs a full browser in headless mode (undetectable)
             self.browser = await self.playwright.chromium.launch(
-                headless=True,
+                headless="new",  # New headless mode - undetectable
                 args=stealth_args,
                 chromium_sandbox=False
             )
