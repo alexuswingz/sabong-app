@@ -87,10 +87,10 @@ class PisoperyaAutomation:
                 '--disable-renderer-backgrounding',
                 '--force-color-profile=srgb',
             ]
-            # Use "new" headless mode - less detectable than old headless
-            # headless="new" runs a full browser in headless mode (undetectable)
+            # Run with xvfb virtual display instead of headless for better compatibility
+            # This makes the browser think it has a real display
             self.browser = await self.playwright.chromium.launch(
-                headless="new",  # New headless mode - undetectable
+                headless=headless,
                 args=stealth_args,
                 chromium_sandbox=False
             )
