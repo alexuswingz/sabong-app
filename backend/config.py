@@ -19,9 +19,7 @@ import os
 # ============ DEPLOYMENT MODE ============
 RAILWAY_ENVIRONMENT = os.environ.get('RAILWAY_ENVIRONMENT', None)
 IS_PRODUCTION = RAILWAY_ENVIRONMENT is not None or os.environ.get('PRODUCTION', 'false').lower() == 'true'
-# With xvfb virtual display, we can run headless=False even in production
-# This bypasses headless browser detection
-HEADLESS_MODE = os.environ.get('HEADLESS', 'false').lower() == 'true'
+HEADLESS_MODE = IS_PRODUCTION or os.environ.get('HEADLESS', 'false').lower() == 'true'
 
 # ============ WCC CREDENTIALS ============
 WCC_USERNAME = os.environ.get('WCC_USERNAME', '')
