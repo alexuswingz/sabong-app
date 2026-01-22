@@ -452,50 +452,86 @@ class PisoperyaAutomation:
             await asyncio.sleep(random.uniform(2, 4))
             await self._random_mouse_move()
             
-            # Step 1: Click the first login button to open the form
-            print("🖱️ Opening login form...")
-            login_btn_found = False
+            # Take debug screenshot of the page
+            try:
+                await self.page.screenshot(path="page_loaded.png")
+                print("📸 Debug screenshot saved to page_loaded.png")
+            except:
+                pass
             
-            # Try multiple selectors for the login button
-            login_selectors = [
-                'button:has-text("Login")',
-                'button:has-text("LOGIN")', 
-                'a:has-text("Login")',
-                'a:has-text("LOGIN")',
-                '[class*="login"]',
-                'button:has-text("Sign In")',
-                'header button',
-                'nav button',
-            ]
+            # Check if we're on a login page (URL contains 'login')
+            current_url = self.page.url
+            print(f"📍 Current URL: {current_url}")
             
-            for selector in login_selectors:
-                try:
-                    btn = self.page.locator(selector).first
-                    if await btn.is_visible(timeout=3000):
-                        await asyncio.sleep(random.uniform(0.3, 1))
-                        await btn.click()
-                        login_btn_found = True
-                        print(f"✅ Clicked login button using: {selector}")
-                        break
-                except:
-                    continue
+            # If URL already has 'login', form should be visible - no need to click button
+            if 'login' in current_url.lower():
+                print("✅ Already on login page, looking for form...")
+            else:
+                # Try to click login button to open form
+                print("🖱️ Opening login form...")
+                login_btn_found = False
+                
+                login_selectors = [
+                    'button:has-text("Login")',
+                    'button:has-text("LOGIN")', 
+                    'a:has-text("Login")',
+                    'a:has-text("LOGIN")',
+                    '[class*="login"]',
+                    'button:has-text("Sign In")',
+                    'header button',
+                    'nav button',
+                ]
+                
+                for selector in login_selectors:
+                    try:
+                        btn = self.page.locator(selector).first
+                        if await btn.is_visible(timeout=3000):
+                            await asyncio.sleep(random.uniform(0.3, 1))
+                            await btn.click()
+                            login_btn_found = True
+                            print(f"✅ Clicked login button using: {selector}")
+                            break
+                    except:
+                        continue
+                
+                if not login_btn_found:
+                    print("⚠️ Could not find login button, page may already show login form...")
             
-            if not login_btn_found:
-                print("⚠️ Could not find login button, page may already show login form...")
-            
-            await asyncio.sleep(random.uniform(2, 4))
+            await asyncio.sleep(random.uniform(1, 2))
             await self._random_mouse_move()
             
             # Step 2: Fill username - wait for input with multiple selector attempts
-            print("👤 Entering username...")
+            print("👤 Looking for username input...")
+            
+            # First, let's see all visible inputs on the page for debugging
+            try:
+                all_inputs = await self.page.locator('input').all()
+                print(f"📋 Found {len(all_inputs)} input fields on page")
+                for i, inp in enumerate(all_inputs[:5]):  # Show first 5
+                    try:
+                        inp_type = await inp.get_attribute('type') or 'unknown'
+                        inp_name = await inp.get_attribute('name') or 'no-name'
+                        inp_placeholder = await inp.get_attribute('placeholder') or 'no-placeholder'
+                        is_visible = await inp.is_visible()
+                        print(f"   Input {i}: type={inp_type}, name={inp_name}, placeholder={inp_placeholder}, visible={is_visible}")
+                    except:
+                        pass
+            except Exception as e:
+                print(f"⚠️ Could not list inputs: {e}")
+            
             username_selectors = [
                 'input[autocomplete="username"]',
                 'input[placeholder*="username" i]',
                 'input[placeholder*="Username" i]',
+                'input[placeholder*="user" i]',
+                'input[placeholder*="email" i]',
                 'input[name="username"]',
                 'input[name="userName"]',
+                'input[name="email"]',
                 'input[type="text"]:visible',
-                'form input[type="text"]',
+                'input[type="email"]:visible',
+                'form input:first-of-type',
+                'input:visible',
             ]
             
             username_input = None
