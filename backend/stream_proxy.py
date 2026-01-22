@@ -54,12 +54,19 @@ class StreamProxy:
         self._proxy_base_url = value
     
     async def start(self):
-        """Initialize the HTTP client"""
+        """Initialize the HTTP client with optimized settings"""
         if self.client is None:
+            # Optimized for streaming - connection pooling & HTTP/2
             self.client = httpx.AsyncClient(
-                timeout=30.0,
+                timeout=httpx.Timeout(30.0, connect=10.0),
                 follow_redirects=True,
-                verify=False  # Some streaming servers have SSL issues
+                verify=False,  # Some streaming servers have SSL issues
+                http2=True,  # Enable HTTP/2 for better performance
+                limits=httpx.Limits(
+                    max_keepalive_connections=20,
+                    max_connections=50,
+                    keepalive_expiry=30.0
+                )
             )
     
     async def stop(self):
@@ -164,7 +171,7 @@ class StreamProxy:
         await self.start()
         
         try:
-            print(f"📥 Fetching segment: {url[-50:]}")  # Last 50 chars for readability
+            # Don't log every segment - too slow
             response = await self.client.get(
                 url,
                 headers=self.headers,
@@ -174,7 +181,7 @@ class StreamProxy:
             if response.status_code == 200:
                 return response.content
             else:
-                print(f"❌ Segment fetch failed: {response.status_code} for {url}")
+                print(f"❌ Segment fetch failed: {response.status_code}")
                 return None
                 
         except Exception as e:

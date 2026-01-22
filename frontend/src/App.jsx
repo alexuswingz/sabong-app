@@ -782,29 +782,30 @@ function App() {
         hlsRef.current.destroy()
       }
       
-      // Proxy stream needs more buffering - disable low latency for stability
+      // Railway Pro - optimized for speed with reasonable buffer
       const hls = new Hls({
         enableWorker: true,
-        // DISABLE low latency - proxy adds too much delay
-        lowLatencyMode: false,
-        // Large buffer = smooth playback (accepts ~10sec delay)
-        liveSyncDurationCount: 4,
-        liveMaxLatencyDurationCount: 10,
+        // Enable low latency since Railway Pro can handle it
+        lowLatencyMode: true,
+        backBufferLength: 30,
+        // Balanced buffer - smooth but not too delayed
+        liveSyncDurationCount: 2,
+        liveMaxLatencyDurationCount: 5,
         liveDurationInfinity: true,
-        highBufferWatchdogPeriod: 2,
-        // Big buffer to prevent stuttering
-        maxBufferLength: 30,
-        maxMaxBufferLength: 60,
-        maxBufferSize: 60 * 1000 * 1000,
-        maxBufferHole: 1.5,
-        // Generous timeouts for proxy
-        fragLoadingTimeOut: 30000,
-        fragLoadingMaxRetry: 10,
+        highBufferWatchdogPeriod: 1,
+        // Moderate buffer
+        maxBufferLength: 15,
+        maxMaxBufferLength: 30,
+        maxBufferSize: 30 * 1000 * 1000,
+        maxBufferHole: 0.5,
+        // Fast timeouts
+        fragLoadingTimeOut: 15000,
+        fragLoadingMaxRetry: 6,
         fragLoadingRetryDelay: 500,
-        manifestLoadingTimeOut: 30000,
-        manifestLoadingMaxRetry: 6,
-        levelLoadingTimeOut: 30000,
-        levelLoadingMaxRetry: 6,
+        manifestLoadingTimeOut: 15000,
+        manifestLoadingMaxRetry: 4,
+        levelLoadingTimeOut: 15000,
+        levelLoadingMaxRetry: 4,
         startLevel: -1,
         autoStartLoad: true,
         progressive: true,
@@ -813,7 +814,7 @@ function App() {
         }
       })
       
-      console.log('📺 Stream player: Smooth mode (buffered for proxy)')
+      console.log('📺 Stream player: Low latency mode (Railway Pro)')
       
       hls.loadSource(streamUrl)
       hls.attachMedia(video)

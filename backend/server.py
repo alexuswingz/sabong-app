@@ -902,18 +902,12 @@ async def proxy_stream_url(url: str):
 
 @app.get("/stream/segment")
 async def proxy_segment_by_url(url: str):
-    """Proxy video segments and sub-playlists by URL query parameter"""
+    """Proxy video segments and sub-playlists by URL query parameter - OPTIMIZED"""
     if not stream_proxy.is_authenticated:
-        raise HTTPException(
-            status_code=401,
-            detail="Not authenticated. Login and extract cookies first."
-        )
-    
-    print(f"🔄 Proxying segment: {url[-60:]}")
+        raise HTTPException(status_code=401, detail="Not authenticated")
     
     # Check if this is another m3u8 (sub-playlist) or a segment
     if url.endswith('.m3u8'):
-        # Sub-playlist - fetch and rewrite URLs
         content = await stream_proxy.fetch_manifest(url)
         if content is None:
             raise HTTPException(status_code=502, detail="Failed to fetch sub-playlist")
@@ -926,7 +920,7 @@ async def proxy_segment_by_url(url: str):
             }
         )
     else:
-        # Video segment (.ts file)
+        # Video segment (.ts file) - no logging for speed
         content = await stream_proxy.fetch_segment(url)
         
         if content is None:
@@ -937,7 +931,8 @@ async def proxy_segment_by_url(url: str):
             media_type="video/MP2T",
             headers={
                 "Access-Control-Allow-Origin": "*",
-                "Cache-Control": "max-age=3600"  # Cache segments for better performance
+                "Cache-Control": "public, max-age=86400",  # Cache 24h - segments are immutable
+                "X-Content-Type-Options": "nosniff"
             }
         )
 
