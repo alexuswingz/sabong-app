@@ -56,12 +56,11 @@ class StreamProxy:
     async def start(self):
         """Initialize the HTTP client with optimized settings"""
         if self.client is None:
-            # Optimized for streaming - connection pooling & HTTP/2
+            # Optimized for streaming - connection pooling
             self.client = httpx.AsyncClient(
                 timeout=httpx.Timeout(30.0, connect=10.0),
                 follow_redirects=True,
                 verify=False,  # Some streaming servers have SSL issues
-                http2=True,  # Enable HTTP/2 for better performance
                 limits=httpx.Limits(
                     max_keepalive_connections=20,
                     max_connections=50,
