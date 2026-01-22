@@ -47,6 +47,11 @@ PUSHER_CLUSTER = os.environ.get('PUSHER_CLUSTER', 'ap1')
 # Max WebSocket connections on this server (0 = unlimited, but risky)
 MAX_WEBSOCKET_CONNECTIONS = int(os.environ.get('MAX_WEBSOCKET_CONNECTIONS', '500'))
 
+# ============ BETTING RAKE (House Commission) ============
+# Percentage taken from winnings (not original bet)
+# Example: 5% rake on 1000 bet = 1000 original + 950 profit = 1950 payout
+RAKE_PERCENTAGE = float(os.environ.get('RAKE_PERCENTAGE', '5'))
+
 # URLs
 WCC_LOGIN_URL = "https://www.wccgames8.xyz/en/login"
 WCC_STREAM_URL = "https://stream.wccgames7.xyz/wccstream/streams/live.m3u8"

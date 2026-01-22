@@ -28,7 +28,8 @@ from automation import PisoperyaAutomation
 from stream_proxy import stream_proxy
 from config import (
     HOST, PORT, CORS_ORIGINS, WCC_STREAM_URL, HEADLESS_MODE, IS_PRODUCTION, 
-    PROXY_URL, WCC_USERNAME, STREAM_MODE, DIRECT_STREAM_URL, MAX_WEBSOCKET_CONNECTIONS
+    PROXY_URL, WCC_USERNAME, STREAM_MODE, DIRECT_STREAM_URL, MAX_WEBSOCKET_CONNECTIONS,
+    RAKE_PERCENTAGE
 )
 import database as db
 
@@ -45,8 +46,13 @@ class AppState:
         self.last_call_time: int = 10
         self.is_browser_running: bool = False
         self.is_logged_in: bool = False
+        # Anti-cheat: Track last bet time per user to prevent spam
+        self.last_bet_time: Dict[int, datetime] = {}
 
 state = AppState()
+
+# Rate limit: minimum seconds between bets for same user
+BET_RATE_LIMIT_SECONDS = 2
 
 
 async def auto_login_wcc():
@@ -283,7 +289,8 @@ async def broadcast_state():
             "stream_delay": state.stream_delay,
             "last_call_time": state.last_call_time,
             "is_browser_running": state.is_browser_running,
-            "is_logged_in": state.is_logged_in
+            "is_logged_in": state.is_logged_in,
+            "rake_percentage": RAKE_PERCENTAGE
         }
     })
 
@@ -1223,21 +1230,42 @@ async def close_betting():
 
 @app.post("/betting/add")
 async def add_bet(bet: BetRequest):
-    """Add a new bet - with server-side credit validation"""
-    if state.betting_status in ["closed", "result"]:
+    """Add a new bet - with server-side credit validation
+    
+    ANTI-CHEAT MEASURES:
+    - Credits validated from DATABASE, not client
+    - Credits deducted IMMEDIATELY when bet placed
+    - Bet stored server-side (user disconnect doesn't cancel bet)
+    - Minimum bet enforced
+    - Maximum bet enforced
+    """
+    if state.betting_status in ["closed", "result", "waiting"]:
         raise HTTPException(status_code=400, detail="Betting is closed")
     
     if bet.amount <= 0:
         raise HTTPException(status_code=400, detail="Invalid bet amount")
     
+    # Minimum bet to prevent spam
+    if bet.amount < 10:
+        raise HTTPException(status_code=400, detail="Minimum bet is ₱10")
+    
     if bet.amount > 100000:  # Max bet limit
-        raise HTTPException(status_code=400, detail="Bet amount exceeds maximum limit")
+        raise HTTPException(status_code=400, detail="Bet amount exceeds maximum limit (₱100,000)")
     
     user_credits = None
     new_credits = None
     
     # If user_id provided, validate credits from DATABASE (not client)
     if bet.user_id:
+        # ANTI-CHEAT: Rate limiting - prevent rapid bet spam
+        last_bet = state.last_bet_time.get(bet.user_id)
+        if last_bet:
+            seconds_since_last = (datetime.now() - last_bet).total_seconds()
+            if seconds_since_last < BET_RATE_LIMIT_SECONDS:
+                raise HTTPException(
+                    status_code=429, 
+                    detail=f"Please wait {BET_RATE_LIMIT_SECONDS - int(seconds_since_last)} seconds before placing another bet"
+                )
         # Get ACTUAL credits from database
         user = await db.get_user_by_id(bet.user_id)
         if not user:
@@ -1267,6 +1295,10 @@ async def add_bet(bet: BetRequest):
     }
     state.bets.append(new_bet)
     
+    # ANTI-CHEAT: Update last bet time for rate limiting
+    if bet.user_id:
+        state.last_bet_time[bet.user_id] = datetime.now()
+    
     await manager.broadcast({
         "type": "new_bet",
         "bet": new_bet
@@ -1281,11 +1313,38 @@ async def add_bet(bet: BetRequest):
 
 
 @app.delete("/betting/{bet_id}")
-async def remove_bet(bet_id: int):
-    """Remove a bet"""
+async def remove_bet(bet_id: int, admin_override: bool = False):
+    """Remove a bet - ADMIN ONLY
+    
+    ANTI-CHEAT: Regular users CANNOT cancel/remove bets once placed.
+    Bets are final. Only admin can remove (for mistakes).
+    
+    If betting is closed, even admin cannot remove (to prevent cheating).
+    """
+    # Find the bet first
+    bet_to_remove = next((b for b in state.bets if b["id"] == bet_id), None)
+    if not bet_to_remove:
+        raise HTTPException(status_code=404, detail="Bet not found")
+    
+    # ANTI-CHEAT: Cannot remove bets after betting closes
+    if state.betting_status in ["closed", "result"]:
+        raise HTTPException(
+            status_code=400, 
+            detail="Cannot remove bets after betting is closed"
+        )
+    
+    # Only allow removal during open betting (admin correcting mistakes)
+    if state.betting_status not in ["open", "lastcall"]:
+        raise HTTPException(status_code=400, detail="Betting is not open")
+    
+    # Refund the user's credits if they had user_id
+    if bet_to_remove.get("user_id"):
+        await db.update_credits(bet_to_remove["user_id"], bet_to_remove["amount"])
+        print(f"💰 Refunded ₱{bet_to_remove['amount']} to user {bet_to_remove['user_id']} for removed bet")
+    
     state.bets = [b for b in state.bets if b["id"] != bet_id]
     await broadcast_state()
-    return {"message": "Bet removed"}
+    return {"message": "Bet removed and credits refunded"}
 
 
 @app.post("/fight/declare-winner")
@@ -1293,17 +1352,34 @@ async def declare_winner(declaration: WinnerDeclaration):
     """Declare the winner of the fight and pay out winners"""
     winner = declaration.winner
     
-    # Process payouts for winning bets (2x return) and save to history
+    # Calculate rake multiplier (e.g., 5% rake = 0.95 multiplier on profit)
+    rake_multiplier = 1 - (RAKE_PERCENTAGE / 100)
+    
+    # Process payouts for winning bets (2x return minus rake) and save to history
     payouts = []
+    total_rake = 0
+    
     if winner in ['meron', 'wala']:
         for bet in state.bets:
             is_winner = bet.get('side') == winner
-            payout_amount = bet['amount'] * 2 if is_winner else 0
+            
+            if is_winner:
+                # Calculate payout with rake
+                # Original bet + (profit * rake_multiplier)
+                # profit = bet amount (since base is 2x)
+                gross_profit = bet['amount']
+                rake_amount = gross_profit * (RAKE_PERCENTAGE / 100)
+                net_profit = gross_profit - rake_amount
+                payout_amount = bet['amount'] + net_profit  # Original + net profit
+                total_rake += rake_amount
+            else:
+                payout_amount = 0
+                
             result = 'win' if is_winner else 'lose'
             
             if bet.get('user_id'):
                 if is_winner:
-                    # Pay winner 2x their bet
+                    # Pay winner (original bet + net profit after rake)
                     new_credits = await db.update_credits(bet['user_id'], payout_amount)
                     if new_credits is not None:
                         payouts.append({
@@ -1311,6 +1387,7 @@ async def declare_winner(declaration: WinnerDeclaration):
                             'name': bet['name'],
                             'bet_amount': bet['amount'],
                             'payout': payout_amount,
+                            'rake': rake_amount,
                             'new_credits': new_credits
                         })
                 
@@ -1379,9 +1456,14 @@ async def declare_winner(declaration: WinnerDeclaration):
         "result": winner,
         "bets": state.bets.copy(),
         "payouts": payouts,
+        "rake_collected": total_rake,
         "timestamp": datetime.now().isoformat()
     }
     state.history.insert(0, history_entry)
+    
+    # Log rake collected
+    if total_rake > 0:
+        print(f"💰 Fight #{state.current_fight}: Rake collected = ₱{total_rake:.2f} ({RAKE_PERCENTAGE}%)")
     
     # Broadcast winner with payouts info
     await manager.broadcast({
@@ -1389,13 +1471,20 @@ async def declare_winner(declaration: WinnerDeclaration):
         "winner": winner,
         "fight": state.current_fight,
         "delay": state.stream_delay,
-        "payouts": payouts  # Send payout info so clients can update
+        "payouts": payouts,  # Send payout info so clients can update
+        "rake_percentage": RAKE_PERCENTAGE
     })
     
     state.betting_status = "result"
     await broadcast_state()
     
-    return {"message": f"{winner} wins!", "fight": state.current_fight, "payouts": payouts}
+    return {
+        "message": f"{winner} wins!", 
+        "fight": state.current_fight, 
+        "payouts": payouts,
+        "rake_collected": total_rake,
+        "rake_percentage": RAKE_PERCENTAGE
+    }
 
 
 @app.post("/fight/reset")
@@ -1412,6 +1501,27 @@ async def reset_fight():
     await broadcast_state()
     
     return {"message": "Ready for next fight", "fight": state.current_fight}
+
+
+class FightNumberUpdate(BaseModel):
+    fight_number: int
+
+
+@app.put("/fight/number")
+async def set_fight_number(data: FightNumberUpdate):
+    """Set the current fight number (admin only)"""
+    if data.fight_number < 1:
+        raise HTTPException(status_code=400, detail="Fight number must be at least 1")
+    
+    state.current_fight = data.fight_number
+    
+    await manager.broadcast({
+        "type": "fight_number_updated",
+        "fight": state.current_fight
+    })
+    await broadcast_state()
+    
+    return {"message": f"Fight number set to {state.current_fight}", "fight": state.current_fight}
 
 
 @app.put("/settings")

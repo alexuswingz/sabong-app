@@ -1,6 +1,9 @@
 """
 Database module for user authentication
 PostgreSQL with asyncpg
+
+For LOCAL DEVELOPMENT: If DATABASE_URL is not set, uses in-memory storage.
+For PRODUCTION: Requires PostgreSQL DATABASE_URL.
 """
 
 import os
@@ -15,14 +18,39 @@ DATABASE_URL = os.environ.get('DATABASE_URL', '')
 # Global connection pool
 pool: Optional[asyncpg.Pool] = None
 
+# In-memory storage for local development (no database)
+LOCAL_MODE = False
+_local_users: Dict[int, Dict] = {}
+_local_user_counter = 0
+_local_settings: Dict[str, str] = {'gcash_number': '09XXXXXXXXX', 'gcash_name': 'Your Name'}
+_local_cashin_requests: list = []
+_local_cashout_requests: list = []
+_local_bet_history: list = []
+
 
 async def init_db():
     """Initialize database connection and create tables"""
-    global pool
+    global pool, LOCAL_MODE, _local_users, _local_user_counter
     
     if not DATABASE_URL:
-        print("❌ DATABASE_URL environment variable not set!")
-        raise ValueError("DATABASE_URL must be set in environment variables")
+        print("⚠️ DATABASE_URL not set - running in LOCAL MODE (in-memory storage)")
+        print("   Data will be lost when server restarts!")
+        LOCAL_MODE = True
+        
+        # Create default admin user for local testing
+        admin_hash = hash_password("admin123")
+        _local_users[1] = {
+            'id': 1,
+            'username': 'admin',
+            'password_hash': admin_hash,
+            'credits': 999999,
+            'is_admin': True,
+            'role': 'admin',
+            'created_at': datetime.now()
+        }
+        _local_user_counter = 1
+        print("✅ Local mode ready! Default admin: admin / admin123")
+        return
     
     try:
         pool = await asyncpg.create_pool(
@@ -103,6 +131,9 @@ async def init_db():
 async def close_db():
     """Close database connection"""
     global pool
+    if LOCAL_MODE:
+        print("👋 Local mode - nothing to close")
+        return
     if pool:
         await pool.close()
         print("👋 Database connection closed")
@@ -121,7 +152,25 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 async def create_user(username: str, password: str) -> Optional[Dict]:
     """Create a new user"""
-    global pool
+    global pool, _local_users, _local_user_counter
+    
+    if LOCAL_MODE:
+        # Check if username exists
+        for u in _local_users.values():
+            if u['username'] == username:
+                return None
+        _local_user_counter += 1
+        user = {
+            'id': _local_user_counter,
+            'username': username,
+            'password_hash': hash_password(password),
+            'credits': 1000,
+            'is_admin': False,
+            'role': 'user',
+            'created_at': datetime.now()
+        }
+        _local_users[_local_user_counter] = user
+        return {k: v for k, v in user.items() if k != 'password_hash'}
     
     try:
         password_hash = hash_password(password)
@@ -145,6 +194,18 @@ async def create_user(username: str, password: str) -> Optional[Dict]:
 async def authenticate_user(username: str, password: str) -> Optional[Dict]:
     """Authenticate a user and return their data"""
     global pool
+    
+    if LOCAL_MODE:
+        for user in _local_users.values():
+            if user['username'] == username and verify_password(password, user['password_hash']):
+                return {
+                    "id": user['id'],
+                    "username": user['username'],
+                    "credits": user['credits'],
+                    "is_admin": user['is_admin'],
+                    "role": user.get('role', 'user')
+                }
+        return None
     
     try:
         async with pool.acquire() as conn:
@@ -176,6 +237,18 @@ async def get_user_by_id(user_id: int) -> Optional[Dict]:
     """Get user by ID"""
     global pool
     
+    if LOCAL_MODE:
+        user = _local_users.get(user_id)
+        if user:
+            return {
+                'id': user['id'],
+                'username': user['username'],
+                'credits': user['credits'],
+                'is_admin': user['is_admin'],
+                'role': user.get('role', 'user')
+            }
+        return None
+    
     try:
         async with pool.acquire() as conn:
             user = await conn.fetchrow(
@@ -195,6 +268,13 @@ async def get_user_by_id(user_id: int) -> Optional[Dict]:
 async def update_credits(user_id: int, amount: int) -> Optional[int]:
     """Update user credits (add or subtract)"""
     global pool
+    
+    if LOCAL_MODE:
+        user = _local_users.get(user_id)
+        if user:
+            user['credits'] = user['credits'] + amount
+            return user['credits']
+        return None
     
     try:
         async with pool.acquire() as conn:
@@ -217,6 +297,13 @@ async def set_credits(user_id: int, credits: int) -> Optional[int]:
     """Set user credits to specific amount"""
     global pool
     
+    if LOCAL_MODE:
+        user = _local_users.get(user_id)
+        if user:
+            user['credits'] = credits
+            return credits
+        return None
+    
     try:
         async with pool.acquire() as conn:
             new_credits = await conn.fetchval(
@@ -238,6 +325,16 @@ async def get_all_users() -> list:
     """Get all users (admin only)"""
     global pool
     
+    if LOCAL_MODE:
+        return [{
+            'id': u['id'],
+            'username': u['username'],
+            'credits': u['credits'],
+            'is_admin': u['is_admin'],
+            'created_at': u.get('created_at'),
+            'last_login': u.get('last_login')
+        } for u in _local_users.values()]
+    
     try:
         async with pool.acquire() as conn:
             users = await conn.fetch(
@@ -253,6 +350,9 @@ async def get_all_users() -> list:
 async def init_settings_table():
     """Create settings table if not exists"""
     global pool
+    
+    if LOCAL_MODE:
+        return  # Use in-memory _local_settings
     
     try:
         async with pool.acquire() as conn:
@@ -312,6 +412,9 @@ async def set_setting(key: str, value: str) -> bool:
 
 async def get_gcash_settings() -> dict:
     """Get GCash settings"""
+    if LOCAL_MODE:
+        return _local_settings.copy()
+    
     number = await get_setting('gcash_number') or '09XXXXXXXXX'
     name = await get_setting('gcash_name') or 'Your Name'
     return {
@@ -322,6 +425,11 @@ async def get_gcash_settings() -> dict:
 
 async def update_gcash_settings(number: str, name: str) -> bool:
     """Update GCash settings"""
+    if LOCAL_MODE:
+        _local_settings['gcash_number'] = number
+        _local_settings['gcash_name'] = name
+        return True
+    
     result1 = await set_setting('gcash_number', number)
     result2 = await set_setting('gcash_name', name)
     return result1 and result2
@@ -331,6 +439,9 @@ async def update_gcash_settings(number: str, name: str) -> bool:
 async def init_cashin_table():
     """Create cash in requests table"""
     global pool
+    
+    if LOCAL_MODE:
+        return  # Use in-memory _local_cashin_requests
     
     try:
         async with pool.acquire() as conn:
@@ -477,6 +588,9 @@ async def init_cashout_table():
     """Create cash out requests table"""
     global pool
     
+    if LOCAL_MODE:
+        return  # Use in-memory _local_cashout_requests
+    
     try:
         async with pool.acquire() as conn:
             await conn.execute('''
@@ -620,6 +734,9 @@ async def init_bet_history_table():
     """Create bet history table to track all bets"""
     global pool
     
+    if LOCAL_MODE:
+        return  # Use in-memory _local_bet_history
+    
     try:
         async with pool.acquire() as conn:
             await conn.execute('''
@@ -645,6 +762,20 @@ async def save_bet_to_history(user_id: int, username: str, fight_number: int,
     """Save a completed bet to history"""
     global pool
     
+    if LOCAL_MODE:
+        _local_bet_history.append({
+            'id': len(_local_bet_history) + 1,
+            'user_id': user_id,
+            'username': username,
+            'fight_number': fight_number,
+            'amount': amount,
+            'side': side,
+            'result': result,
+            'payout': payout,
+            'created_at': datetime.now()
+        })
+        return True
+    
     try:
         async with pool.acquire() as conn:
             await conn.execute('''
@@ -660,6 +791,10 @@ async def save_bet_to_history(user_id: int, username: str, fight_number: int,
 async def get_user_bet_history(user_id: int, limit: int = 50) -> list:
     """Get bet history for a user"""
     global pool
+    
+    if LOCAL_MODE:
+        user_bets = [b for b in _local_bet_history if b['user_id'] == user_id]
+        return sorted(user_bets, key=lambda x: x['created_at'], reverse=True)[:limit]
     
     try:
         async with pool.acquire() as conn:
@@ -678,6 +813,16 @@ async def get_user_bet_history(user_id: int, limit: int = 50) -> list:
 async def get_user_transactions(user_id: int, limit: int = 50) -> dict:
     """Get all transactions for a user (bets, cash-in, cash-out)"""
     global pool
+    
+    if LOCAL_MODE:
+        user_bets = [b for b in _local_bet_history if b['user_id'] == user_id]
+        user_cashins = [c for c in _local_cashin_requests if c.get('user_id') == user_id]
+        user_cashouts = [c for c in _local_cashout_requests if c.get('user_id') == user_id]
+        return {
+            'bets': sorted(user_bets, key=lambda x: x['created_at'], reverse=True)[:limit],
+            'cashins': sorted(user_cashins, key=lambda x: x.get('created_at', datetime.now()), reverse=True)[:limit],
+            'cashouts': sorted(user_cashouts, key=lambda x: x.get('created_at', datetime.now()), reverse=True)[:limit]
+        }
     
     try:
         async with pool.acquire() as conn:

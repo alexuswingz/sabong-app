@@ -7,6 +7,9 @@ import './App.css'
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws'
 
+// Check if running in production
+const IS_PRODUCTION = import.meta.env.PROD || API_URL.includes('railway.app') || API_URL.includes('up.railway.app')
+
 function App() {
   // Auth State - Database backed
   const [currentUser, setCurrentUser] = useState(null) // { id, username, credits, is_admin }
@@ -51,6 +54,9 @@ function App() {
   const [cashOutHistory, setCashOutHistory] = useState([])
   const [loadingTransactions, setLoadingTransactions] = useState(false)
   
+  // Mobile Menu
+  const [showMobileMenu, setShowMobileMenu] = useState(false)
+  
   // Computed - Role based access
   const userRole = currentUser?.role || 'user' // 'user', 'cashier', 'admin'
   const isAdmin = userRole === 'admin'
@@ -73,6 +79,7 @@ function App() {
   const [loading, setLoading] = useState('')
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [winner, setWinner] = useState(null)
+  const [rakePercentage, setRakePercentage] = useState(5)
   
   // Stream URLs - uses the same base as API_URL
   const PROXY_STREAM_URL = `${API_URL}/stream/live.m3u8`
@@ -84,6 +91,7 @@ function App() {
   // Bet form
   const [betName, setBetName] = useState('')
   const [betAmount, setBetAmount] = useState('')
+  const [chipStack, setChipStack] = useState([]) // Track chips for undo functionality
   
   // Live Audio State (from stream)
   const [audioMuted, setAudioMuted] = useState(true) // Start muted (autoplay policy)
@@ -94,6 +102,75 @@ function App() {
   const audioContextRef = useRef(null)
   const videoRef = useRef(null)
   const hlsRef = useRef(null)
+  
+  // ===== PRODUCTION SECURITY =====
+  // Disable right-click and dev tools in production
+  useEffect(() => {
+    if (!IS_PRODUCTION) return
+    
+    // Disable right-click context menu
+    const handleContextMenu = (e) => {
+      e.preventDefault()
+      return false
+    }
+    
+    // Disable dev tools shortcuts
+    const handleKeyDown = (e) => {
+      // F12
+      if (e.key === 'F12') {
+        e.preventDefault()
+        return false
+      }
+      // Ctrl+Shift+I (Dev Tools)
+      if (e.ctrlKey && e.shiftKey && e.key === 'I') {
+        e.preventDefault()
+        return false
+      }
+      // Ctrl+Shift+J (Console)
+      if (e.ctrlKey && e.shiftKey && e.key === 'J') {
+        e.preventDefault()
+        return false
+      }
+      // Ctrl+Shift+C (Inspect Element)
+      if (e.ctrlKey && e.shiftKey && e.key === 'C') {
+        e.preventDefault()
+        return false
+      }
+      // Ctrl+U (View Source)
+      if (e.ctrlKey && e.key === 'u') {
+        e.preventDefault()
+        return false
+      }
+    }
+    
+    // Detect dev tools open (basic detection)
+    const detectDevTools = () => {
+      const threshold = 160
+      if (window.outerWidth - window.innerWidth > threshold || 
+          window.outerHeight - window.innerHeight > threshold) {
+        // Dev tools might be open - could log this or take action
+        console.clear()
+      }
+    }
+    
+    document.addEventListener('contextmenu', handleContextMenu)
+    document.addEventListener('keydown', handleKeyDown)
+    
+    // Check periodically for dev tools
+    const devToolsInterval = setInterval(detectDevTools, 1000)
+    
+    // Clear console in production
+    console.clear()
+    console.log('%c⚠️ STOP!', 'color: red; font-size: 50px; font-weight: bold;')
+    console.log('%cThis is a browser feature intended for developers.', 'font-size: 16px;')
+    console.log('%cIf someone told you to paste something here, it\'s likely a scam.', 'font-size: 14px; color: gray;')
+    
+    return () => {
+      document.removeEventListener('contextmenu', handleContextMenu)
+      document.removeEventListener('keydown', handleKeyDown)
+      clearInterval(devToolsInterval)
+    }
+  }, [])
   
   // ===== AUTH FUNCTIONS =====
   const handleLogin = async () => {
@@ -890,6 +967,9 @@ function App() {
         setLastCallTime(data.data.last_call_time)
         setIsBrowserRunning(data.data.is_browser_running)
         setIsLoggedIn(data.data.is_logged_in)
+        if (data.data.rake_percentage !== undefined) {
+          setRakePercentage(data.data.rake_percentage)
+        }
         break
       
       case 'arena_loaded':
@@ -984,6 +1064,10 @@ function App() {
         if (currentUser && !isStaff) {
           refreshUserData()
         }
+        break
+      
+      case 'fight_number_updated':
+        setFightNumber(data.fight)
         break
         
       case 'new_bet':
@@ -1108,6 +1192,41 @@ function App() {
   
   const declareWinner = (winner) => apiCall('/fight/declare-winner', 'POST', { winner })
   const resetFight = () => apiCall('/fight/reset')
+  const setFightNum = (num) => apiCall('/fight/number', 'PUT', { fight_number: num })
+
+  // Chip helper functions
+  const currentBetTotal = chipStack.reduce((sum, chip) => sum + chip, 0)
+  const remainingBalance = userCredit - currentBetTotal
+  
+  const addChip = (amount) => {
+    // Check if adding this chip would exceed balance
+    if (!isAdmin && currentUser && (currentBetTotal + amount) > userCredit) {
+      // Can't add - would exceed balance
+      return
+    }
+    const newStack = [...chipStack, amount]
+    setChipStack(newStack)
+    setBetAmount(String(newStack.reduce((sum, chip) => sum + chip, 0)))
+  }
+  
+  const undoChip = () => {
+    if (chipStack.length === 0) return
+    const newStack = chipStack.slice(0, -1)
+    setChipStack(newStack)
+    setBetAmount(newStack.length > 0 ? String(newStack.reduce((sum, chip) => sum + chip, 0)) : '')
+  }
+  
+  const clearChips = () => {
+    setChipStack([])
+    setBetAmount('')
+  }
+  
+  // Check if a chip can be added (won't exceed balance)
+  const canAddChip = (amount) => {
+    if (isAdmin) return true
+    if (!currentUser) return false
+    return (currentBetTotal + amount) <= userCredit
+  }
 
   const addBet = async (side) => {
     if (!currentUser) {
@@ -1160,6 +1279,7 @@ function App() {
       
       if (isAdmin) setBetName('')
       setBetAmount('')
+      setChipStack([])
       
     } catch (error) {
       console.error('Bet error:', error)
@@ -1654,45 +1774,98 @@ OR cookie string: session=abc123; token=xyz456'
       
       {/* Header */}
       <header className="header">
-        <div className="logo">🐓 SABONG {isAdmin ? 'ADMIN' : isCashier ? 'CASHIER' : 'ARENA'}</div>
-        <div className="header-controls">
-          {currentUser && !isStaff && (
+        <button className="hamburger-btn" onClick={() => setShowMobileMenu(!showMobileMenu)}>
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
+        
+        <div className="header-main">
+          {currentUser && !isStaff ? (
             <>
               <div className="user-credit">
-                💰 ₱{userCredit.toLocaleString()}
+                ₱{userCredit.toLocaleString()}
               </div>
               <button className="cashin-btn" onClick={openCashInModal}>
-                💵 In
+                + Cash In
               </button>
               <button className="cashout-btn" onClick={openCashOutModal}>
-                💸 Out
-              </button>
-              <button className="history-btn" onClick={openTransactionsModal} title="Transaction History">
-                📜
+                - Cash Out
               </button>
             </>
-          )}
-          <div className={`connection-status ${connected ? 'connected' : 'disconnected'}`}>
-            {connected ? '🟢' : '🔴'}
-          </div>
-          <div className="fight-number">
-            <span className="fight-label">FIGHT #</span>
-            <span className="fight-value">{fightNumber}</span>
-          </div>
-          
-          {currentUser ? (
-            <div className="user-menu">
-              <span className="username-display">👤 {userName}</span>
-              <button className="admin-logout-btn" onClick={handleLogout}>
-                🚪 Logout
-              </button>
+          ) : currentUser ? (
+            <div className="staff-badge">
+              {isAdmin ? 'ADMIN' : 'CASHIER'}
             </div>
           ) : (
-            <button className="admin-login-btn" onClick={() => setShowAuthModal(true)}>
-              🔐 Login
+            <button className="login-btn-header" onClick={() => setShowAuthModal(true)}>
+              Login
             </button>
           )}
         </div>
+        
+        {/* Mobile Menu Dropdown */}
+        {showMobileMenu && (
+          <div className="mobile-menu-overlay" onClick={() => setShowMobileMenu(false)}>
+            <div className="mobile-menu" onClick={e => e.stopPropagation()}>
+              <div className="mobile-menu-header">
+                <span className="mobile-menu-title">Menu</span>
+                <button className="mobile-menu-close" onClick={() => setShowMobileMenu(false)}>×</button>
+              </div>
+              
+              <div className="mobile-menu-content">
+                {/* Fight Info */}
+                <div className="menu-section">
+                  <div className="menu-item fight-info">
+                    <span className="menu-label">Current Fight</span>
+                    <span className="menu-value fight">#{fightNumber}</span>
+                  </div>
+                  <div className="menu-item">
+                    <span className="menu-label">Connection</span>
+                    <span className={`menu-value status ${connected ? 'online' : 'offline'}`}>
+                      {connected ? 'Online' : 'Offline'}
+                    </span>
+                  </div>
+                </div>
+                
+                {/* User Section */}
+                {currentUser && (
+                  <div className="menu-section">
+                    <div className="menu-item">
+                      <span className="menu-label">Logged in as</span>
+                      <span className="menu-value">{userName}</span>
+                    </div>
+                    {!isStaff && (
+                      <div className="menu-item">
+                        <span className="menu-label">Balance</span>
+                        <span className="menu-value balance">₱{userCredit.toLocaleString()}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+                
+                {/* Actions */}
+                <div className="menu-section">
+                  {currentUser && !isStaff && (
+                    <button className="menu-action-btn" onClick={() => { openTransactionsModal(); setShowMobileMenu(false); }}>
+                      📜 Transaction History
+                    </button>
+                  )}
+                  
+                  {currentUser ? (
+                    <button className="menu-action-btn logout" onClick={() => { handleLogout(); setShowMobileMenu(false); }}>
+                      Logout
+                    </button>
+                  ) : (
+                    <button className="menu-action-btn login" onClick={() => { setShowAuthModal(true); setShowMobileMenu(false); }}>
+                      Login / Register
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </header>
 
       <main className="main-container">
@@ -1724,9 +1897,6 @@ OR cookie string: session=abc123; token=xyz456'
                 <div className="auto-login-status">
                   <div className="loading-spinner"></div>
                   <p>⏳ Waiting for stream cookies...</p>
-                  <p className="cookie-hint">
-                    Run <code>cookie-sync/RUN_SYNC.bat</code> on your PC
-                  </p>
                   {isAdmin && (
                     <button 
                       className="cookie-btn"
@@ -1865,26 +2035,31 @@ OR cookie string: session=abc123; token=xyz456'
             </div>
           </div>
 
-          {/* Status Display */}
-          <div className="panel-card status-panel">
-            <div className={`status-text ${status}`}>
-              {status === 'waiting' && 'WAITING'}
-              {status === 'open' && 'BETTING OPEN'}
-              {status === 'lastcall' && 'LAST CALL'}
-              {status === 'closed' && 'BETTING CLOSED'}
-              {status === 'result' && (
-                winner === 'meron' ? '🔴 MERON WINS!' :
-                winner === 'wala' ? '🔵 WALA WINS!' :
-                winner === 'draw' ? '⚪ DRAW!' :
-                winner === 'cancelled' ? '❌ CANCELLED' : 'RESULT'
-              )}
+          {/* Betting Status Banner - Large & Obvious */}
+          <div className={`betting-status-banner ${status}`}>
+            <div className="status-indicator">
+              <div className={`status-dot ${status}`}></div>
+              <div className="status-content">
+                <span className="status-label">
+                  {status === 'waiting' && 'WAITING FOR NEXT FIGHT'}
+                  {status === 'open' && 'BETTING IS OPEN'}
+                  {status === 'lastcall' && 'LAST CALL - PLACE YOUR BETS!'}
+                  {status === 'closed' && 'BETTING CLOSED'}
+                  {status === 'result' && (
+                    winner === 'meron' ? 'MERON WINS!' :
+                    winner === 'wala' ? 'WALA WINS!' :
+                    winner === 'draw' ? 'DRAW - BETS REFUNDED' :
+                    winner === 'cancelled' ? 'CANCELLED - BETS REFUNDED' : 'RESULT'
+                  )}
+                </span>
+                {countdown !== null && (
+                  <span className="countdown-timer">{countdown}s</span>
+                )}
+              </div>
             </div>
-            <div className="countdown-display">
-              {countdown !== null ? countdown : 
-               status === 'open' ? '🟢' :
-               status === 'closed' ? '🔴' :
-               status === 'result' ? '🏆' : '--'}
-            </div>
+            {(status === 'open' || status === 'lastcall') && (
+              <div className="status-hint">Place your bets now!</div>
+            )}
           </div>
         </div>
 
@@ -1915,6 +2090,30 @@ OR cookie string: session=abc123; token=xyz456'
                     onBlur={updateSettings}
                   />
                   <span>sec</span>
+                </div>
+                <div className="delay-control fight-number-control">
+                  <label>Fight #:</label>
+                  <button 
+                    className="fight-num-btn"
+                    onClick={() => setFightNum(Math.max(1, fightNumber - 1))}
+                  >
+                    −
+                  </button>
+                  <input 
+                    type="number" 
+                    value={fightNumber} 
+                    min="1"
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value) || 1
+                      if (val >= 1) setFightNum(val)
+                    }}
+                  />
+                  <button 
+                    className="fight-num-btn"
+                    onClick={() => setFightNum(fightNumber + 1)}
+                  >
+                    +
+                  </button>
                 </div>
               </div>
 
@@ -2059,31 +2258,6 @@ OR cookie string: session=abc123; token=xyz456'
             </div>
           )}
 
-          {/* USER: Account Panel - Prompt login if not logged in (hide for staff) */}
-          {!isStaff && (
-            <div className="panel-card user-panel">
-              <div className="panel-title">👤 MY ACCOUNT</div>
-              {currentUser ? (
-                <div className="user-info">
-                  <div className="credit-display">
-                    <span className="credit-label">Balance</span>
-                    <span className="credit-amount">₱{userCredit.toLocaleString()}</span>
-                  </div>
-                  <div className="user-name-display">
-                    Logged in as: <strong>{userName}</strong>
-                  </div>
-                </div>
-              ) : (
-                <div className="login-prompt">
-                  <p>Login to place bets and track your credits!</p>
-                  <button className="btn-login-prompt" onClick={() => setShowAuthModal(true)}>
-                    🔐 Login / Register
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
           {/* Bet Panel - Not for Cashiers */}
           {!isCashier && (
           <div className="panel-card">
@@ -2098,30 +2272,60 @@ OR cookie string: session=abc123; token=xyz456'
                   className="bet-input name"
                 />
               )}
-              <input 
-                type="number" 
-                placeholder="Amount"
-                value={betAmount}
-                onChange={(e) => setBetAmount(e.target.value)}
-                className="bet-input amount"
-              />
-              {/* Quick bet amount buttons */}
-              <div className="quick-bet-amounts">
+              {/* Bet Amount Display */}
+              <div className="bet-amount-display">
+                <span className="bet-amount-value">
+                  {betAmount ? `₱${parseInt(betAmount).toLocaleString()}` : '₱0'}
+                </span>
+                <div className="bet-display-info">
+                  {chipStack.length > 0 && (
+                    <span className="chip-count">{chipStack.length} chip{chipStack.length !== 1 ? 's' : ''}</span>
+                  )}
+                  {!isAdmin && currentUser && (
+                    <span className="remaining-balance">Left: ₱{remainingBalance.toLocaleString()}</span>
+                  )}
+                </div>
+              </div>
+              
+              {/* Chip Buttons */}
+              <div className="chip-buttons">
                 {[10, 50, 100, 500, 1000].map(amt => (
                   <button 
                     key={amt}
-                    className={`quick-bet-btn ${betAmount === String(amt) ? 'active' : ''}`}
-                    onClick={() => setBetAmount(String(amt))}
+                    className={`chip-btn ${!canAddChip(amt) ? 'disabled' : ''}`}
+                    onClick={() => addChip(amt)}
+                    disabled={!canAddChip(amt)}
                   >
-                    {amt}
+                    +{amt}
                   </button>
                 ))}
-                {!isAdmin && currentUser && userCredit >= 100 && (
+              </div>
+              
+              {/* Action Buttons */}
+              <div className="chip-actions">
+                <button 
+                  className="chip-action-btn undo"
+                  onClick={undoChip}
+                  disabled={chipStack.length === 0}
+                >
+                  ↩ Undo
+                </button>
+                <button 
+                  className="chip-action-btn clear"
+                  onClick={clearChips}
+                  disabled={chipStack.length === 0}
+                >
+                  Clear
+                </button>
+                {!isAdmin && currentUser && remainingBalance >= 10 && (
                   <button 
-                    className={`quick-bet-btn all ${betAmount === String(userCredit) ? 'active' : ''}`}
-                    onClick={() => setBetAmount(String(userCredit))}
+                    className="chip-action-btn all-in"
+                    onClick={() => {
+                      setChipStack([...chipStack, remainingBalance])
+                      setBetAmount(String(userCredit))
+                    }}
                   >
-                    ALL
+                    +All
                   </button>
                 )}
               </div>
@@ -2132,14 +2336,24 @@ OR cookie string: session=abc123; token=xyz456'
                 onClick={() => addBet('meron')}
                 disabled={status !== 'open' && status !== 'lastcall'}
               >
-                MERON
+                <span className="btn-side-name">MERON</span>
+                {betAmount > 0 && (
+                  <span className="btn-potential-win">
+                    Win ₱{Math.floor(betAmount * (2 - rakePercentage / 100)).toLocaleString()}
+                  </span>
+                )}
               </button>
               <button 
                 className="bet-btn wala" 
                 onClick={() => addBet('wala')}
                 disabled={status !== 'open' && status !== 'lastcall'}
               >
-                WALA
+                <span className="btn-side-name">WALA</span>
+                {betAmount > 0 && (
+                  <span className="btn-potential-win">
+                    Win ₱{Math.floor(betAmount * (2 - rakePercentage / 100)).toLocaleString()}
+                  </span>
+                )}
               </button>
             </div>
             {(status !== 'open' && status !== 'lastcall') && (
@@ -2172,21 +2386,62 @@ OR cookie string: session=abc123; token=xyz456'
             </div>
           </div>
 
-          {/* History */}
-          <div className="panel-card history-panel">
-            <div className="panel-title">📜 FIGHT HISTORY</div>
-            <div className="history-list">
+          {/* Results Board */}
+          <div className="panel-card results-board">
+            <div className="panel-title">📊 RESULTS</div>
+            
+            {/* Statistics */}
+            <div className="results-stats">
+              <div className="stat-item meron">
+                <span className="stat-count">{history.filter(h => h.result === 'meron').length}</span>
+                <span className="stat-label">MERON</span>
+              </div>
+              <div className="stat-item wala">
+                <span className="stat-count">{history.filter(h => h.result === 'wala').length}</span>
+                <span className="stat-label">WALA</span>
+              </div>
+              <div className="stat-item draw">
+                <span className="stat-count">{history.filter(h => h.result === 'draw').length}</span>
+                <span className="stat-label">DRAW</span>
+              </div>
+              <div className="stat-item cancelled">
+                <span className="stat-count">{history.filter(h => h.result === 'cancelled').length}</span>
+                <span className="stat-label">CANCEL</span>
+              </div>
+            </div>
+            
+            {/* Results Grid */}
+            <div className="results-grid">
               {history.length === 0 ? (
-                <p className="no-history">No history yet</p>
+                <p className="no-history">No results yet</p>
               ) : (
-                history.slice(0, isAdmin ? 15 : 10).map((h, i) => (
-                  <div key={i} className="history-item">
-                    <span className="history-fight">Fight #{h.fight}</span>
-                    <span className={`history-result ${h.result}`}>{h.result.toUpperCase()}</span>
+                history.slice(0, 50).map((h, i) => (
+                  <div 
+                    key={i} 
+                    className={`result-circle ${h.result}`}
+                    title={`Fight #${h.fight} - ${h.result.toUpperCase()}`}
+                  >
+                    {h.fight}
                   </div>
                 ))
               )}
             </div>
+            
+            {/* Trend Road - Last 20 */}
+            {history.length > 0 && (
+              <div className="trend-road">
+                <div className="trend-label">Recent Trend</div>
+                <div className="trend-dots">
+                  {history.slice(0, 20).map((h, i) => (
+                    <div 
+                      key={i} 
+                      className={`trend-dot ${h.result}`}
+                      title={`#${h.fight}`}
+                    ></div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </main>
