@@ -1997,6 +1997,201 @@ OR cookie string: session=abc123; token=xyz456'
         )}
       </header>
 
+      {/* CASHIER DEDICATED DASHBOARD */}
+      {isCashier ? (
+        <main className="cashier-dashboard">
+          {/* Cashier Header Stats */}
+          <div className="cashier-stats">
+            <div className="stat-card pending">
+              <div className="stat-icon">📥</div>
+              <div className="stat-info">
+                <span className="stat-number">{pendingCashIns.length}</span>
+                <span className="stat-label">Pending Cash-Ins</span>
+              </div>
+            </div>
+            <div className="stat-card pending">
+              <div className="stat-icon">📤</div>
+              <div className="stat-info">
+                <span className="stat-number">{pendingCashOuts.length}</span>
+                <span className="stat-label">Pending Cash-Outs</span>
+              </div>
+            </div>
+            <div className="stat-card total">
+              <div className="stat-icon">💰</div>
+              <div className="stat-info">
+                <span className="stat-number">₱{pendingCashIns.reduce((sum, r) => sum + r.amount, 0).toLocaleString()}</span>
+                <span className="stat-label">Cash-In Total</span>
+              </div>
+            </div>
+            <div className="stat-card total">
+              <div className="stat-icon">💸</div>
+              <div className="stat-info">
+                <span className="stat-number">₱{pendingCashOuts.reduce((sum, r) => sum + r.amount, 0).toLocaleString()}</span>
+                <span className="stat-label">Cash-Out Total</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="cashier-content">
+            {/* Cash-In Section */}
+            <div className="cashier-section">
+              <div className="section-header">
+                <h2>📥 Cash-In Requests</h2>
+                <span className="section-count">{pendingCashIns.length} pending</span>
+              </div>
+              
+              {pendingCashIns.length === 0 ? (
+                <div className="empty-state">
+                  <span className="empty-icon">✅</span>
+                  <p>No pending cash-in requests</p>
+                </div>
+              ) : (
+                <div className="transaction-list">
+                  {pendingCashIns.map(req => (
+                    <div key={req.id} className="transaction-card cashin">
+                      <div className="transaction-main">
+                        <div className="transaction-user">
+                          <span className="user-avatar">{req.username?.charAt(0).toUpperCase()}</span>
+                          <div className="user-info">
+                            <span className="user-name">{req.username}</span>
+                            <span className="transaction-ref">{req.reference_code}</span>
+                          </div>
+                        </div>
+                        <div className="transaction-amount">
+                          <span className="amount">+₱{req.amount.toLocaleString()}</span>
+                          <span className="time">{new Date(req.created_at).toLocaleTimeString()}</span>
+                        </div>
+                      </div>
+                      <div className="transaction-actions">
+                        <button 
+                          className="action-btn approve"
+                          onClick={() => approveCashIn(req.id)}
+                          disabled={processingCashIn === req.id}
+                        >
+                          {processingCashIn === req.id ? 'Processing...' : '✓ Approve'}
+                        </button>
+                        <button 
+                          className="action-btn reject"
+                          onClick={() => rejectCashIn(req.id)}
+                          disabled={processingCashIn === req.id}
+                        >
+                          ✗ Reject
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Cash-Out Section */}
+            <div className="cashier-section">
+              <div className="section-header">
+                <h2>📤 Cash-Out Requests</h2>
+                <span className="section-count">{pendingCashOuts.length} pending</span>
+              </div>
+              
+              {pendingCashOuts.length === 0 ? (
+                <div className="empty-state">
+                  <span className="empty-icon">✅</span>
+                  <p>No pending cash-out requests</p>
+                </div>
+              ) : (
+                <div className="transaction-list">
+                  {pendingCashOuts.map(req => (
+                    <div key={req.id} className={`transaction-card cashout ${showCashOutQR === req.id ? 'expanded' : ''}`}>
+                      <div className="transaction-main">
+                        <div className="transaction-user">
+                          <span className="user-avatar">{req.username?.charAt(0).toUpperCase()}</span>
+                          <div className="user-info">
+                            <span className="user-name">{req.username}</span>
+                            <span className="transaction-ref">{req.reference_code}</span>
+                          </div>
+                        </div>
+                        <div className="transaction-amount">
+                          <span className="amount out">-₱{req.amount.toLocaleString()}</span>
+                          <span className="gcash-num">{req.gcash_number}</span>
+                        </div>
+                      </div>
+                      
+                      <div className="transaction-actions">
+                        <button 
+                          className="action-btn details"
+                          onClick={() => setShowCashOutQR(showCashOutQR === req.id ? null : req.id)}
+                        >
+                          {showCashOutQR === req.id ? '▲ Hide' : '▼ Details'}
+                        </button>
+                        <button 
+                          className="action-btn approve"
+                          onClick={() => approveCashOut(req.id)}
+                          disabled={processingCashOut === req.id}
+                        >
+                          {processingCashOut === req.id ? 'Processing...' : '✓ Sent'}
+                        </button>
+                        <button 
+                          className="action-btn reject"
+                          onClick={() => rejectCashOut(req.id)}
+                          disabled={processingCashOut === req.id}
+                        >
+                          ✗ Reject
+                        </button>
+                      </div>
+                      
+                      {/* Expanded Payment Details */}
+                      {showCashOutQR === req.id && (
+                        <div className="payment-details-panel">
+                          <div className="detail-row">
+                            <span className="detail-label">GCash Number</span>
+                            <div className="detail-value-row">
+                              <span className="detail-value highlight">{req.gcash_number}</span>
+                              <button 
+                                className="copy-btn small"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(req.gcash_number)
+                                  alert('📋 Copied!')
+                                }}
+                              >
+                                Copy
+                              </button>
+                            </div>
+                          </div>
+                          <div className="detail-row">
+                            <span className="detail-label">Account Name</span>
+                            <span className="detail-value">{req.gcash_name}</span>
+                          </div>
+                          <div className="detail-row">
+                            <span className="detail-label">Amount to Send</span>
+                            <div className="detail-value-row">
+                              <span className="detail-value amount-highlight">₱{req.amount.toLocaleString()}</span>
+                              <button 
+                                className="copy-btn small"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(req.amount.toString())
+                                  alert('📋 Copied!')
+                                }}
+                              >
+                                Copy
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          
+          {/* GCash Settings Button */}
+          <button 
+            className="cashier-settings-btn"
+            onClick={() => setShowGcashSettingsModal(true)}
+          >
+            ⚙️ GCash Settings
+          </button>
+        </main>
+      ) : (
       <main className="main-container">
         {/* Left Column - Stream & Betting Board */}
         <div className="left-column">
@@ -2639,6 +2834,7 @@ OR cookie string: session=abc123; token=xyz456'
           </div>
         </div>
       </main>
+      )}
 
       <footer className="footer">
         {isAdmin ? (
