@@ -764,41 +764,39 @@ function App() {
         hlsRef.current.destroy()
       }
       
-      // LOW LATENCY MODE - Stay close to live edge
+      // BALANCED MODE - Smooth playback with reasonable latency
       const hls = new Hls({
         enableWorker: true,
-        // ENABLE low latency for real-time viewing
-        lowLatencyMode: true,
+        lowLatencyMode: false,          // Disable for stability
         backBufferLength: 30,
-        // Stay close to live edge
-        liveSyncDurationCount: 2,        // Stay only 4sec behind live
-        liveMaxLatencyDurationCount: 5,  // Max 10sec behind before catching up
+        // Balanced live sync - not too far behind
+        liveSyncDurationCount: 3,        // Stay ~6sec behind live
+        liveMaxLatencyDurationCount: 8,  // Max 16sec behind before catching up
         liveDurationInfinity: true,
-        highBufferWatchdogPeriod: 1,
-        // Smaller buffer for lower latency
-        maxBufferLength: 10,             // 10 seconds buffer
-        maxMaxBufferLength: 30,          // Max 30 sec buffer
-        maxBufferSize: 30 * 1000 * 1000, // 30MB buffer
-        maxBufferHole: 0.5,              // Smaller gaps allowed
-        // Faster timeouts for responsiveness
+        highBufferWatchdogPeriod: 2,
+        // Moderate buffer for smooth playback
+        maxBufferLength: 30,             // 30 seconds buffer
+        maxMaxBufferLength: 60,          // Max 60 sec buffer
+        maxBufferSize: 60 * 1000 * 1000, // 60MB buffer
+        maxBufferHole: 1,                // Allow 1sec gaps
+        // Reasonable timeouts
         fragLoadingTimeOut: 20000,
         fragLoadingMaxRetry: 6,
-        fragLoadingRetryDelay: 500,
-        manifestLoadingTimeOut: 15000,
+        fragLoadingRetryDelay: 1000,
+        manifestLoadingTimeOut: 20000,
         manifestLoadingMaxRetry: 4,
-        levelLoadingTimeOut: 15000,
+        levelLoadingTimeOut: 20000,
         levelLoadingMaxRetry: 4,
         startLevel: -1,
         autoStartLoad: true,
         progressive: true,
-        // Start at live edge
         startPosition: -1,
         xhrSetup: (xhr, url) => {
           xhr.withCredentials = false
         }
       })
       
-      console.log('📺 Stream player: Low latency mode (close to live)')
+      console.log('📺 Stream player: Balanced mode (smooth + reasonable latency)')
       
       hls.loadSource(streamUrl)
       hls.attachMedia(video)
@@ -841,20 +839,20 @@ function App() {
         }
       })
       
-      // Keep stream close to live - check every 2 seconds
+      // Keep stream reasonably close to live - check every 5 seconds
       const keepLive = setInterval(() => {
         if (video && hls.liveSyncPosition) {
           const currentTime = video.currentTime
           const livePosition = hls.liveSyncPosition
           const drift = livePosition - currentTime
           
-          // If more than 5 seconds behind, jump to live
-          if (drift > 5) {
+          // If more than 15 seconds behind, gently catch up
+          if (drift > 15) {
             console.log(`⏩ Syncing to live (was ${drift.toFixed(1)}s behind)`)
-            video.currentTime = livePosition - 1 // Stay 1 sec behind edge for buffer
+            video.currentTime = livePosition - 3 // Stay 3 sec behind edge for smooth buffer
           }
         }
-      }, 2000)
+      }, 5000)
       
       hlsRef.current = hls
       
