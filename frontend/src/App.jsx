@@ -746,42 +746,79 @@ function App() {
     }
   }, [])
 
-  // HLS Video Player Effect - LOW LATENCY & STABILITY
+  // HLS Video Player Effect - OPTIMIZED FOR MOBILE & DESKTOP
   useEffect(() => {
     if (!streamUrl || !videoRef.current || !showStream) return
     
     const video = videoRef.current
     setStreamStatus('loading')
     
+    // Check if native HLS is supported (Safari/iOS) - use native for best mobile performance
+    const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+    const canPlayNativeHLS = video.canPlayType('application/vnd.apple.mpegurl')
+    
+    if (isIOS && canPlayNativeHLS) {
+      // Use native Safari HLS - much smoother on iPhone
+      console.log('🍎 iOS detected - using native HLS playback for best performance')
+      video.src = streamUrl
+      video.addEventListener('loadedmetadata', () => {
+        console.log('✅ Native HLS loaded')
+        setStreamStatus('playing')
+        video.play().catch(e => console.log('Autoplay prevented:', e))
+      })
+      video.addEventListener('error', (e) => {
+        console.error('Native HLS error:', e)
+        setStreamStatus('error')
+      })
+      return () => {
+        video.src = ''
+        video.removeEventListener('loadedmetadata', () => {})
+        video.removeEventListener('error', () => {})
+      }
+    }
+    
     if (Hls.isSupported()) {
       if (hlsRef.current) {
         hlsRef.current.destroy()
       }
       
+      // Detect mobile for optimized settings
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+      
       const hls = new Hls({
         enableWorker: true,
-        lowLatencyMode: true,
-        liveSyncDurationCount: 1,
-        liveMaxLatencyDurationCount: 3,
+        // Mobile: prioritize smooth playback over low latency
+        lowLatencyMode: !isMobile,
+        // Buffer more on mobile for smoother playback
+        liveSyncDurationCount: isMobile ? 3 : 1,
+        liveMaxLatencyDurationCount: isMobile ? 6 : 3,
         liveDurationInfinity: true,
-        highBufferWatchdogPeriod: 1,
-        maxBufferLength: 10,
-        maxMaxBufferLength: 30,
-        maxBufferSize: 30 * 1000 * 1000,
-        maxBufferHole: 0.5,
-        fragLoadingTimeOut: 20000,
-        fragLoadingMaxRetry: 6,
+        highBufferWatchdogPeriod: isMobile ? 2 : 1,
+        // Larger buffer for mobile to prevent stutter
+        maxBufferLength: isMobile ? 30 : 10,
+        maxMaxBufferLength: isMobile ? 60 : 30,
+        maxBufferSize: isMobile ? 60 * 1000 * 1000 : 30 * 1000 * 1000,
+        maxBufferHole: isMobile ? 1 : 0.5,
+        // More forgiving timeouts for mobile networks
+        fragLoadingTimeOut: isMobile ? 30000 : 20000,
+        fragLoadingMaxRetry: isMobile ? 8 : 6,
         fragLoadingRetryDelay: 1000,
-        manifestLoadingTimeOut: 20000,
-        manifestLoadingMaxRetry: 4,
-        levelLoadingTimeOut: 20000,
-        levelLoadingMaxRetry: 4,
+        manifestLoadingTimeOut: isMobile ? 30000 : 20000,
+        manifestLoadingMaxRetry: 6,
+        levelLoadingTimeOut: isMobile ? 30000 : 20000,
+        levelLoadingMaxRetry: 6,
         startLevel: -1,
         autoStartLoad: true,
+        // Progressive loading helps on mobile
+        progressive: true,
         xhrSetup: (xhr, url) => {
           xhr.withCredentials = false
         }
       })
+      
+      if (isMobile) {
+        console.log('📱 Mobile detected - using smooth playback mode')
+      }
       
       hls.loadSource(streamUrl)
       hls.attachMedia(video)
