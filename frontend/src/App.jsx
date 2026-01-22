@@ -945,29 +945,34 @@ function App() {
         
       case 'winner_declared':
         setWinner(data.winner)
-        setTimeout(async () => {
-          playSound('winner')
-          speak(`${data.winner === 'meron' ? 'Meron' : data.winner === 'wala' ? 'Wala' : data.winner} wins!`)
-          
-          // Check if current user won and update credits from SERVER data
-          if (currentUser && data.payouts) {
-            const myPayout = data.payouts.find(p => p.user_id === currentUser.id)
-            if (myPayout) {
-              // Update with ACTUAL credits from server
-              setCurrentUser(prev => ({ ...prev, credits: myPayout.new_credits }))
-              localStorage.setItem('sabong_user', JSON.stringify({ ...currentUser, credits: myPayout.new_credits }))
-              
-              if (myPayout.payout) {
-                alert(`🎉 You won ₱${myPayout.payout.toLocaleString()}! New balance: ₱${myPayout.new_credits.toLocaleString()}`)
-              } else if (myPayout.refund) {
-                alert(`💰 Refunded ₱${myPayout.refund.toLocaleString()}. Balance: ₱${myPayout.new_credits.toLocaleString()}`)
-              }
+        playSound('winner')
+        speak(`${data.winner === 'meron' ? 'Meron' : data.winner === 'wala' ? 'Wala' : data.winner} wins!`)
+        
+        // Immediately update credits for all users who bet (winners get payout info)
+        if (currentUser && data.payouts) {
+          const myPayout = data.payouts.find(p => p.user_id === currentUser.id)
+          if (myPayout && myPayout.new_credits !== undefined) {
+            // Update with ACTUAL credits from server immediately
+            setCurrentUser(prev => ({ ...prev, credits: myPayout.new_credits }))
+            localStorage.setItem('sabong_user', JSON.stringify({ ...currentUser, credits: myPayout.new_credits }))
+            
+            // Show notification for winners/refunds only
+            if (myPayout.payout && myPayout.payout > 0) {
+              setTimeout(() => {
+                alert(`🎉 You won ₱${myPayout.payout.toLocaleString()}!`)
+              }, 500)
+            } else if (myPayout.refund && myPayout.refund > 0) {
+              setTimeout(() => {
+                alert(`💰 Refunded ₱${myPayout.refund.toLocaleString()}`)
+              }, 500)
             }
           }
-          
-          // Always refresh to ensure credits are synced with database
-          await refreshUserData()
-        }, data.delay * 1000)
+        }
+        
+        // Refresh all users' credits from database to ensure sync
+        if (currentUser && !isStaff) {
+          refreshUserData()
+        }
         break
         
       case 'fight_reset':
@@ -975,6 +980,10 @@ function App() {
         setWinner(null)
         setCountdown(null)
         speak(`Ready for fight number ${data.fight}`)
+        // Refresh credits on fight reset to catch any missed updates
+        if (currentUser && !isStaff) {
+          refreshUserData()
+        }
         break
         
       case 'new_bet':
@@ -1767,35 +1776,26 @@ OR cookie string: session=abc123; token=xyz456'
 
           {/* Live Stream Player */}
           {showStream && streamUrl && (
-            <div className="panel-card stream-panel">
-              <div className="panel-title">
-                📺 LIVE
-                <div className="stream-controls-header">
-                  <span className={`stream-status-badge ${streamStatus}`}>
-                    {streamStatus === 'loading' && '⏳ Loading...'}
-                    {streamStatus === 'playing' && '🔴 LIVE'}
-                    {streamStatus === 'error' && '🔄 Reconnecting...'}
-                    {streamStatus === 'unknown' && '⏳'}
-                  </span>
-                  {/* Live Audio Control Button */}
-                  <button 
-                    className={`audio-toggle-btn ${audioMuted ? 'muted' : 'playing'}`}
-                    onClick={toggleAudio}
-                    title={audioMuted ? 'Unmute Live Audio' : 'Mute Live Audio'}
-                  >
-                    {audioMuted ? '🔇' : '🔊'}
-                  </button>
-                  {isAdmin && (
-                    <>
-                      <button className="stream-refresh-btn" onClick={() => {
-                        setStreamStatus('loading')
-                        setShowStream(false)
-                        setTimeout(() => setShowStream(true), 100)
-                      }}>🔄</button>
-                      <button className="stream-close-btn" onClick={() => setShowStream(false)}>✕</button>
-                    </>
-                  )}
-                </div>
+            <div className="panel-card stream-panel sticky-video">
+              <div className="stream-header-controls">
+                {/* Live Audio Control Button */}
+                <button 
+                  className={`audio-toggle-btn ${audioMuted ? 'muted' : 'playing'}`}
+                  onClick={toggleAudio}
+                  title={audioMuted ? 'Unmute' : 'Mute'}
+                >
+                  {audioMuted ? '🔇' : '🔊'}
+                </button>
+                {isAdmin && (
+                  <>
+                    <button className="stream-refresh-btn" onClick={() => {
+                      setStreamStatus('loading')
+                      setShowStream(false)
+                      setTimeout(() => setShowStream(true), 100)
+                    }}>🔄</button>
+                    <button className="stream-close-btn" onClick={() => setShowStream(false)}>✕</button>
+                  </>
+                )}
               </div>
               <div className="video-container">
                 <video 
@@ -1835,16 +1835,14 @@ OR cookie string: session=abc123; token=xyz456'
                     <span className="live-dot"></span> LIVE
                   </div>
                 )}
-                {/* Live Audio Indicator */}
+                {/* Audio Indicator - just bars, no text */}
                 {!audioMuted && streamStatus === 'playing' && (
                   <div className="audio-indicator">
                     <div className="audio-bars">
                       <div className="audio-bar"></div>
                       <div className="audio-bar"></div>
                       <div className="audio-bar"></div>
-                      <div className="audio-bar"></div>
                     </div>
-                    <span>LIVE AUDIO</span>
                   </div>
                 )}
               </div>
@@ -2107,9 +2105,26 @@ OR cookie string: session=abc123; token=xyz456'
                 onChange={(e) => setBetAmount(e.target.value)}
                 className="bet-input amount"
               />
-              {!isAdmin && currentUser && (
-                <span className="max-bet">Max: ₱{userCredit.toLocaleString()}</span>
-              )}
+              {/* Quick bet amount buttons */}
+              <div className="quick-bet-amounts">
+                {[10, 50, 100, 500, 1000].map(amt => (
+                  <button 
+                    key={amt}
+                    className={`quick-bet-btn ${betAmount === String(amt) ? 'active' : ''}`}
+                    onClick={() => setBetAmount(String(amt))}
+                  >
+                    {amt}
+                  </button>
+                ))}
+                {!isAdmin && currentUser && userCredit >= 100 && (
+                  <button 
+                    className={`quick-bet-btn all ${betAmount === String(userCredit) ? 'active' : ''}`}
+                    onClick={() => setBetAmount(String(userCredit))}
+                  >
+                    ALL
+                  </button>
+                )}
+              </div>
             </div>
             <div className="bet-buttons">
               <button 
@@ -2117,14 +2132,14 @@ OR cookie string: session=abc123; token=xyz456'
                 onClick={() => addBet('meron')}
                 disabled={status !== 'open' && status !== 'lastcall'}
               >
-                BET MERON
+                MERON
               </button>
               <button 
                 className="bet-btn wala" 
                 onClick={() => addBet('wala')}
                 disabled={status !== 'open' && status !== 'lastcall'}
               >
-                BET WALA
+                WALA
               </button>
             </div>
             {(status !== 'open' && status !== 'lastcall') && (

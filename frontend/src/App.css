@@ -305,6 +305,43 @@ body {
   width: 100%;
   aspect-ratio: 16/9;
   background: #000;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* Sticky video on mobile */
+@media (max-width: 768px) {
+  .sticky-video {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    margin: 0 -12px;
+    border-radius: 0;
+    padding: 0;
+    background: #000;
+  }
+  
+  .sticky-video .video-container {
+    border-radius: 0;
+  }
+  
+  .sticky-video .stream-header-controls {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 10;
+  }
+}
+
+/* Stream header controls */
+.stream-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
 }
 
 .stream-video {
@@ -841,6 +878,51 @@ body {
   font-size: 0.75rem;
   color: var(--text-muted);
   text-align: right;
+}
+
+/* Quick bet amount buttons */
+.quick-bet-amounts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.quick-bet-btn {
+  flex: 1;
+  min-width: 50px;
+  padding: 8px 4px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-glass);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.quick-bet-btn:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.quick-bet-btn.active {
+  border-color: var(--gold);
+  background: var(--gold);
+  color: #000;
+}
+
+.quick-bet-btn.all {
+  background: rgba(251, 191, 36, 0.2);
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+.quick-bet-btn.all:hover,
+.quick-bet-btn.all.active {
+  background: var(--gold);
+  color: #000;
 }
 
 .bet-buttons {
